@@ -14,6 +14,7 @@ use database::function_types::{
 use database::rs_snippet::{
     format_generic_params, format_generic_params_replacing_by_self, should_derive_clone,
     unique_lifetimes, Lifetime, LifetimeOptions, Mutability, PassingConvention, RsTypeKind,
+    RustPtrKind,
 };
 use database::{intern, BindingsGenerator};
 use error_report::{anyhow, bail, ErrorList};
@@ -1482,6 +1483,29 @@ fn can_use_thunkless_getter(field_type: &RsTypeKind, return_type: &RsTypeKind) -
         && !field_type.is_owned_ptr()
 }
 
+/// Returns whether a setter assigning a value of type `param_type` to a field of type
+/// `field_type` can be emitted directly in Rust as a pointer write at the field offset without a
+/// C++ thunk.
+///
+/// The write is a bitwise copy, so it can only replace a C++ assignment which is itself a bitwise
+/// copy: only primitives and plain C++ pointers qualify. (Assigning to a C++ reference member
+/// assigns through the reference, whereas writing the field would rebind it; and the new value of
+/// an owned pointer is passed as an owning wrapper type rather than as a raw pointer.) As for
+/// getters, the two types must be the same up to type aliases: an `as` cast does not implement
+/// C++'s conversions (e.g. C++ `char` is mapped to `u8`, which `as` zero-extends where C++
+/// sign-extends).
+fn can_use_thunkless_setter(field_type: &RsTypeKind, param_type: &RsTypeKind) -> bool {
+    field_type.unalias() == param_type.unalias()
+        && matches!(
+            field_type.unalias(),
+            RsTypeKind::Primitive(_)
+                | RsTypeKind::Pointer {
+                    kind: RustPtrKind::CcPtr(PointerTypeKind::Nullable | PointerTypeKind::NonNull),
+                    ..
+                }
+        )
+}
+
 fn thunkless_accessor<'a>(
     db: &BindingsGenerator<'a>,
     func: &Func<'a>,
@@ -1508,11 +1532,10 @@ fn thunkless_accessor<'a>(
             })
         }
         MemberFuncSemantic::Setter(setter) => {
-            let (Ok(field_type @ RsTypeKind::Primitive(_)), Some(RsTypeKind::Primitive(_))) =
-                (db.rs_type_kind(setter.type_.clone()), param_types.get(1))
-            else {
+            let field_type = db.rs_type_kind(setter.type_.clone()).ok()?;
+            if !can_use_thunkless_setter(&field_type, param_types.get(1)?) {
                 return None;
-            };
+            }
             Some(ThunklessAccessor {
                 kind: ThunklessAccessorKind::Setter,
                 field_type,
@@ -1559,8 +1582,12 @@ fn generate_func_body<'a>(
         let offset_bytes = syn::Index::from(offset / 8);
         let body = match kind {
             ThunklessAccessorKind::Getter => {
+                // `&raw const`, rather than `&*`, so as not to materialize a reference to the
+                // whole record: `#self_arg` may be a raw pointer.
                 quote! {
-                    *((&*#self_arg as *const _ as *const u8).add(#offset_bytes) as *const #return_type_or_self)
+                    ::core::ptr::read(
+                        ((&raw const *#self_arg) as *const u8).add(#offset_bytes) as *const #return_type_or_self
+                    )
                 }
             }
             ThunklessAccessorKind::Setter => {
@@ -1577,8 +1604,12 @@ fn generate_func_body<'a>(
                 } else {
                     quote! { (#self_arg as *mut _ as *mut u8) }
                 };
+                // `ptr::write`, rather than an assignment, which would first drop the old value.
                 quote! {
-                    *((#self_ptr).add(#offset_bytes) as *mut #field_type_tokens) = (#val_arg as #field_type_tokens)
+                    ::core::ptr::write(
+                        (#self_ptr).add(#offset_bytes) as *mut #field_type_tokens,
+                        #val_arg
+                    )
                 }
             }
         };
