@@ -671,7 +671,7 @@ std::unique_ptr<ir_proto::Item> FunctionDeclImporter::Import(
       point_of_instantiation = function_decl->getLocation();
     }
     crubit::RecordingDiagnosticConsumer diagnostic_recorder =
-        crubit::RecordDiagnostics(ictx_.sema_.getDiagnostics(), [&] {
+        crubit::RecordDiagnosticsAndMarkFailedInstantiations(ictx_, [&] {
           // Generally, clang is able to instantiate templates like this even
           // after parsing completes. However, in rare cases it accesses
           // transient parsing state (Scope) which was already cleaned up.
@@ -933,7 +933,7 @@ std::unique_ptr<ir_proto::Item> FunctionDeclImporter::Import(
     // is OK if this is a method of a class template, since Crubit
     // instantiates the members of the class templates eagerly.
     crubit::RecordingDiagnosticConsumer diagnostic_recorder =
-        crubit::RecordDiagnostics(ictx_.sema_.getDiagnostics(), [&] {
+        crubit::RecordDiagnosticsAndMarkFailedInstantiations(ictx_, [&] {
           undeduced_return_type = ictx_.sema_.DeduceReturnType(
               function_decl, function_decl->getLocation());
         });

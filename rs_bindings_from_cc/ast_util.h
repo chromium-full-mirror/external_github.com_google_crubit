@@ -13,6 +13,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "rs_bindings_from_cc/decl_importer.h"
+#include "rs_bindings_from_cc/recording_diagnostic_consumer.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
@@ -131,6 +132,17 @@ const clang::TagDecl* StripCStyleNameIntroducingTypedef(
 // for a member variable).
 bool ForceDefineImplicitFunction(ImportContext& ictx,
                                  clang::FunctionDecl* function_decl);
+
+// Like `crubit::RecordDiagnostics`, but additionally records what was being
+// instantiated when an error was reported as failed: class template
+// specializations via `ImportContext::MarkAsInvalidTemplateSpecialization`, and
+// function template instantiations via `setInvalidDecl()`.
+//
+// Clang reports the errors of a failed instantiation only once, and usually
+// leaves the instantiation complete (or defined) and not `isInvalidDecl()`, so
+// this is the only chance to observe that it is ill-formed.
+RecordingDiagnosticConsumer RecordDiagnosticsAndMarkFailedInstantiations(
+    ImportContext& ictx, absl::FunctionRef<void()> callback);
 
 // Checks to see if `function_decl` can reach an invalid template instantiation
 // or an invalid default/implicit member (including if `function_decl` itself
