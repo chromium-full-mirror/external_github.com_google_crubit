@@ -5,21 +5,21 @@
 name: 'Setup Crubit CI'
 description: >
   Shared CI setup for every Crubit workflow: a single Google Cloud
-  authentication, plus opt-in Bazel remote caching, sccache (for C++ and/or
-  Rust) and protoc. Replaces the former setup_bazel and setup_sccache actions,
-  which each authenticated separately and each carried their own copy of the
-  unauthenticated-fork fallback logic.
+  authentication, plus opt-in Bazel Remote Build Execution (RBE), sccache (for
+  C++ and/or Rust) and protoc. Replaces the former setup_bazel and
+  setup_sccache actions, which each authenticated separately and each carried
+  their own copy of the unauthenticated-fork fallback logic.
 
 inputs:
   gcp_sa_key:
     description: >
-      Google Cloud service account key JSON used for cache authentication.
-      Empty for pull requests from forks, which have no access to secrets; all
-      caches then degrade to read-only or off.
+      Google Cloud service account key JSON used for RBE and cache
+      authentication. Empty for pull requests from forks, which have no access
+      to secrets; RBE and sccache then degrade to off.
     required: false
     default: ''
   bazel:
-    description: 'Install Bazel and point it at the GCS remote cache.'
+    description: 'Install Bazel and configure Remote Build Execution (RBE).'
     required: false
     default: 'false'
   llvm:
@@ -96,26 +96,34 @@ runs:
     # reads $HOME/.bazelrc for every workspace, which matters because
     # examples/build_systems/bazel is a second workspace with its own .bazelrc
     # that would otherwise need a duplicate copy of these flags.
-    - name: Configure Bazel remote cache
+    - name: Configure Bazel RBE
       if: ${{ inputs.bazel == 'true' }}
       shell: bash
       env:
         AUTHENTICATED: ${{ steps.creds.outputs.authenticated }}
+      # TODO: Once https://github.com/bazelbuild/bazel/pull/30000 lands in a Bazel release, turn
+      # remote compression back on. Without that fix, it causes build failures.
+      # echo "build --remote_cache_compression=true"
       run: |
         {
-          echo "build --remote_cache=https://storage.googleapis.com/crubit-ci-bazel"
           echo "build --color=yes"
           echo "build --show_timestamps"
         } >> "$HOME/.bazelrc"
 
         if [[ "$AUTHENTICATED" == "true" ]]; then
-          echo "build --google_default_credentials" >> "$HOME/.bazelrc"
-          echo "Bazel GCS remote cache: read-write"
+          {
+            echo "build --remote_executor=grpcs://remotebuildexecution.googleapis.com"
+            echo "build --remote_instance_name=projects/crubit-oss-ci-268835/instances/default_instance"
+            echo "build --google_default_credentials"
+            echo "build --remote_default_exec_properties=OSFamily=Linux"
+            echo "build --remote_default_exec_properties=container-image=docker://us-docker.pkg.dev/crubit-oss-ci-268835/ci/rbe-ubuntu2404@sha256:d4b8ad90249585bc240a5db39f68f9b843471737d33c26ae02223568051fae2d"
+            echo "build --jobs=50"
+          } >> "$HOME/.bazelrc"
+          echo "Bazel RBE: enabled"
         else
-          # The bucket is world-readable, so unauthenticated fork PRs can still
-          # read from it; they just must not try to upload.
-          echo "build --remote_upload_local_results=false" >> "$HOME/.bazelrc"
-          echo "Bazel GCS remote cache: read-only"
+          # RBE does not support unauthenticated access, so fork PRs build
+          # locally on the runner.
+          echo "Bazel RBE: disabled (no credentials)"
         fi
 
     - name: Resolve LLVM commit
