@@ -6,8 +6,10 @@
 #define THIRD_PARTY_CRUBIT_RS_BINDINGS_FROM_CC_TEST_MANUAL_BRIDGE_VOCABULARY_TYPES_NONNULL_SMART_POINTER_LIB_H_
 
 #include <memory>
+#include <vector>
 
 #include "absl/base/nullability.h"
+#include "absl/status/statusor.h"
 #include "rs_bindings_from_cc/test/manual_bridge_vocabulary_types/common.h"
 
 inline absl_nonnull std::unique_ptr<int> MakeNonnullUniquePtr(int value) {
@@ -36,6 +38,19 @@ MakeNonnullVirtualUniquePtr() {
 
 // Unannotated, for contrast: this stays a plain `unique_ptr` on the Rust side.
 inline std::unique_ptr<int> MakeUniquePtr(int value) {
+  return std::make_unique<int>(value);
+}
+
+// Nullability on a template argument applies to that argument.
+inline std::vector<absl_nonnull std::unique_ptr<int>> MakeVectorOfNonnull(
+    int value) {
+  std::vector<absl_nonnull std::unique_ptr<int>> v;
+  v.push_back(std::make_unique<int>(value));
+  return v;
+}
+
+inline absl::StatusOr<absl_nonnull std::unique_ptr<int>> MakeStatusOrOfNonnull(
+    int value) {
   return std::make_unique<int>(value);
 }
 

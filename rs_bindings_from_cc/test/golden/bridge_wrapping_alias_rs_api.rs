@@ -24,7 +24,7 @@
 //   Class templates are not yet supported
 
 // error: function `bridge_alias_to_inst` could not be bound
-//   Type 'TemplateType < int >' has an error and cannot be bridged: template instantiation is not yet supported
+//   Type 'AliasToInst' has an error and cannot be bridged: Unsupported type alias AliasToInst
 
 // error: struct `TemplateType<int>` could not be bound
 //   template instantiation is not yet supported

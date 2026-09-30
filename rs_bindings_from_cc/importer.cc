@@ -37,6 +37,7 @@
 #include "common/status_macros.h"
 #include "common/string_view_conversion.h"
 #include "lifetime_annotations/type_lifetimes.h"
+#include "nullability/pragma.h"
 #include "rs_bindings_from_cc/annotations_consumer.h"
 #include "rs_bindings_from_cc/ast_util.h"
 #include "rs_bindings_from_cc/bazel_types.h"
@@ -85,6 +86,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Regex.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace crubit {
@@ -1461,6 +1463,13 @@ absl_nullable std::unique_ptr<ir_proto::Item> Importer::ImportDecl(
         /*is_hard_error=*/*must_bind);
   }
 
+  // Types spelled in `decl` are governed by the file containing `decl`, for
+  // the purpose of `#pragma nullability file_default`. Nested imports (e.g. of
+  // members) set their own governing file and restore ours afterwards.
+  llvm::SaveAndRestore governing_file(
+      governing_file_, ctx_.getSourceManager()
+                           .getDecomposedExpansionLoc(decl->getLocation())
+                           .first);
   for (auto& importer : decl_importers_) {
     std::unique_ptr<ir_proto::Item> result =
         importer->ImportDecl(decl, *must_bind);
@@ -2161,44 +2170,44 @@ CcType Importer::ConvertTemplateSpecializationType(
 CcType Importer::WithAsWrittenTemplateArgs(
     CcType converted, const clang::TemplateSpecializationType& type,
     bool assume_lifetimes) {
-  // The gate below is deliberately narrow, and each conjunct is load-bearing:
+  // The specialization decl is shared by every use with the same canonical
+  // arguments, so it cannot carry anything that differs between uses: e.g.
+  // the nullability in `std::vector<absl_nonnull std::unique_ptr<T>>`, or the
+  // lifetime in `absl::Span<View $a>`. Record the argument as written here,
+  // and let consumers prefer it over the decl's.
   //
-  //  * `assume_lifetimes`: outside that feature nothing reads lifetimes, so
-  //    recording the arguments would only churn the IR.
-  //  * exactly one argument, written as a type: every consumer of
-  //    `template_args` today assumes a single type argument (see
-  //    `choose_one_type` in `rs_snippet.rs`, and the arity check in
-  //    `BridgeRsTypeKind::new`, which errors on a mismatch). Supporting
-  //    higher arities means generalizing those first.
-  //  * an explicit lifetime somewhere in that argument: this is the only
-  //    information that the shared specialization decl cannot already carry,
-  //    and testing for it before converting keeps the conversion -- and the
-  //    imports it triggers as a side effect -- out of the picture entirely
-  //    when the gate is closed. The lifetime need not be on the argument's
-  //    outermost type: in `W<W<int* $a>>` or `W<const V<int* $a>&>` it is
-  //    nested, and the conversion below records it on the inner use (via a
-  //    recursive call to this function, or on the pointee).
+  // Only a single argument, written as a type, is recorded: every consumer of
+  // `template_args` today assumes a single type argument (see
+  // `choose_one_type` in `rs_snippet.rs`). This still covers `std::vector<T>`
+  // and friends, because defaulted arguments (like the allocator) are not
+  // written, and so are not counted.
   //
   // TODO(zarko): broaden to arity > 1 once the consumers above no longer
   // assume a single argument.
-  if (!assume_lifetimes) return converted;
   if (!std::holds_alternative<ItemId>(converted.variant)) return converted;
 
   llvm::ArrayRef<clang::TemplateArgument> args = type.template_arguments();
   if (args.size() != 1) return converted;
   if (args[0].getKind() != clang::TemplateArgument::Type) return converted;
   clang::QualType arg_type = args[0].getAsType();
-  if (!ContainsExplicitLifetimes(arg_type)) return converted;
 
-  // A malformed lifetime annotation in the argument surfaces here as an error
-  // type, rather than being silently dropped.
   CcType converted_arg = ConvertQualType(arg_type, /*lifetimes=*/nullptr,
                                          /*nullable=*/true, assume_lifetimes);
   if (const auto* error = std::get_if<FormattedError>(&converted_arg.variant)) {
-    return CcType(FormattedError::Substitute(
-        "Failed to convert the template argument of '$0', which carries an "
-        "explicit lifetime: $1",
-        clang::QualType(&type, 0).getAsString(), error->message()));
+    // A malformed lifetime annotation surfaces here as an error type, rather
+    // than being silently dropped: the lifetime was written down in the
+    // source, so dropping it would produce bindings that disagree with the
+    // header.
+    if (assume_lifetimes && ContainsExplicitLifetimes(arg_type)) {
+      return CcType(FormattedError::Substitute(
+          "Failed to convert the template argument of '$0', which carries an "
+          "explicit lifetime: $1",
+          clang::QualType(&type, 0).getAsString(), error->message()));
+    }
+    // Otherwise, fall back to the decl's argument. It was converted
+    // successfully when the specialization was imported, so this only loses
+    // information that is specific to this use.
+    return converted;
   }
   converted.template_args.push_back(std::move(converted_arg));
   return converted;
@@ -2228,6 +2237,39 @@ static bool IsSameCanonicalUnqualifiedType(clang::QualType type1,
   return type1 == type2;
 }
 
+clang::NullabilityKindOrNone Importer::GetDefaultNullability(
+    const clang::Type& type) const {
+  // By default, the type was spelled directly in the decl being imported.
+  clang::FileID file = governing_file_;
+  // But if it was spelled via a typedef, the type was written in the typedef's
+  // declaration, so that file governs. With nested typedefs, the innermost one
+  // is where the type was written.
+  //
+  // TODO(okabayashi): Handle substituted template arguments, e.g.
+  // `std::vector<std::unique_ptr<T>>`, which should be governed by the file
+  // in which the template argument was written.
+  const clang::Type* current = &type;
+  while (true) {
+    if (const auto* typedef_type =
+            clang::dyn_cast<clang::TypedefType>(current)) {
+      file =
+          ctx_.getSourceManager()
+              .getDecomposedExpansionLoc(typedef_type->getDecl()->getLocation())
+              .first;
+    }
+    const clang::Type* next =
+        current->getLocallyUnqualifiedSingleStepDesugaredType().getTypePtr();
+    if (next == current) break;
+    current = next;
+  }
+
+  const clang::tidy::nullability::NullabilityPragmas& pragmas =
+      invocation_.nullability_pragmas_;
+  auto it = pragmas.find(file);
+  if (it == pragmas.end()) return std::nullopt;
+  return it->second;
+}
+
 absl::StatusOr<CcType> Importer::ConvertType(
     const clang::Type& type,
     const clang::tidy::lifetimes::ValueLifetimes* absl_nullable lifetimes,
@@ -2239,6 +2281,10 @@ absl::StatusOr<CcType> Importer::ConvertType(
     // and `ConvertUnattributedType` looks straight through that. `type` is
     // still sugared here, so this is the last point at which we can see it.
     clang::NullabilityKindOrNone nullability = type.getNullability();
+    if (!nullability.has_value() &&
+        type.canHaveNullability(/*ResultIfUnknown=*/false)) {
+      nullability = GetDefaultNullability(type);
+    }
     cpp_type->is_nonnull = nullability.has_value() &&
                            *nullability == clang::NullabilityKind::NonNull;
     // Raw pointers record non-nullness in their kind. Both kinds still map to
@@ -2450,6 +2496,14 @@ absl::StatusOr<CcType> Importer::ConvertUnattributedType(
         EnsureSuccessfullyImported(typedef_type->getDecl())) {
       return ConvertTypeDecl(typedef_type->getDecl());
     }
+    // The underlying type was written in the typedef's file, so that file's
+    // nullability default governs the types within it, such as its template
+    // arguments.
+    llvm::SaveAndRestore governing_file(
+        governing_file_,
+        ctx_.getSourceManager()
+            .getDecomposedExpansionLoc(typedef_type->getDecl()->getLocation())
+            .first);
     return ConvertQualType(typedef_type->getDecl()->getUnderlyingType(),
                            lifetimes, /*nullable=*/true, assume_lifetimes);
   } else if (const auto* using_type = type.getAs<clang::UsingType>()) {

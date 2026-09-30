@@ -209,14 +209,14 @@ class Importer final : public ImportContext {
       const clang::TemplateSpecializationType& type, bool assume_lifetimes);
 
   // Attaches the template arguments of `type` as written at this use site to
-  // `converted`, if they carry a lifetime that the specialization decl cannot.
+  // `converted`, so that per-use information the shared specialization decl
+  // cannot carry (e.g. nullability or lifetimes) reaches codegen.
   //
-  // Returns `converted` unchanged unless `assume_lifetimes` is enabled and
-  // `type` has exactly one argument, written as a type, with an explicit
-  // lifetime annotation somewhere within it (see `ContainsExplicitLifetimes`).
-  // Returns an error type if such an argument fails to convert: the lifetime
-  // was written down in the source, so dropping it silently would produce
-  // bindings that disagree with the header.
+  // Only a single written argument, which must be a type, is recorded.
+  // Records nothing if it fails to convert, except that it returns an error
+  // type if the argument carries an explicit lifetime annotation, because the
+  // lifetime was written down in the source, so dropping it silently would
+  // produce bindings that disagree with the header.
   CcType WithAsWrittenTemplateArgs(
       CcType converted, const clang::TemplateSpecializationType& type,
       bool assume_lifetimes);
@@ -257,6 +257,20 @@ class Importer final : public ImportContext {
 
   clang::QualType rs_core_fmt_debug_;
   const clang::ClassTemplateDecl* absl_nullable rs_std_impl_;
+
+  // Returns the nullability that `type` has in the absence of an explicit
+  // annotation: the `#pragma nullability file_default` of the file in which
+  // `type` was written, if any.
+  //
+  // This mirrors the "governing file" logic of the nullability library
+  // (`getGoverningFile` in nullability/type_nullability.cc).
+  clang::NullabilityKindOrNone GetDefaultNullability(
+      const clang::Type& type) const;
+
+  // The file whose `#pragma nullability file_default` governs types that are
+  // spelled directly in the decl currently being imported (i.e. not via a
+  // typedef). Set by `ImportDecl`.
+  clang::FileID governing_file_;
 };  // class Importer
 
 }  // namespace crubit
