@@ -109,6 +109,7 @@ def _bindings_for_toolchain_headers_impl(ctx):
         extra_rs_compile_data = extra_rs_compile_data,
         deps_for_cc_file = ctx.attr._deps_for_bindings[DepsForBindingsInfo].deps_for_cc_file,
         deps_for_rs_file = depset(extra_rs_deps + ctx.attr._deps_for_bindings[DepsForBindingsInfo].deps_for_rs_file),
+        extra_hdrs = public_libc_files + public_libcxx_files + ctx.files.extra_hdrs,
     )
     bindings_providers = list(bindings_providers)
     for p in list(bindings_providers):

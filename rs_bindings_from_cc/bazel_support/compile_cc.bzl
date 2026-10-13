@@ -33,7 +33,11 @@ def compile_cc(
     Returns:
       A CcInfo provider.
     """
-    cc_info = cc_common.merge_cc_infos(cc_infos = cc_infos)
+
+    # Use `direct_cc_infos` (exported deps) rather than `cc_infos` (non-exported deps) so that
+    # `_module_map` and `_exporting_module_maps` are preserved for `layering_check` and
+    # `use_header_modules`.
+    cc_info = cc_common.merge_cc_infos(direct_cc_infos = cc_infos)
 
     user_copts = []
     for copt in getattr(attr, "copts", []):
@@ -79,6 +83,9 @@ def compile_cc(
         cc_common.create_debug_context(compilation_outputs),
     ])
 
+    # `compilation_context` already carries the headers and header modules of `cc_infos` as
+    # non-exported deps. Don't re-export `cc_infos` here: the caller decides which module maps
+    # dependents may use (see `RustBindingsFromCcInfo.cc_info`).
     return CcInfo(
         compilation_context = compilation_context,
         linking_context = linking_context,
