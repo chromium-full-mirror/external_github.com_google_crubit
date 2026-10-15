@@ -57,8 +57,8 @@ crubit_cc_test(
     ],
     deps = [
         ":structs_cc_api",
-        "//testing/base/public:gunit_main",
         "@abseil-cpp//absl/strings",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -67,7 +67,7 @@ crubit_ios_device_test(
     srcs = ["structs_test.cc"],
     deps = [
         ":structs_cc_api",
-        "//testing/base/public:gunit_main",
         "@abseil-cpp//absl/strings",
+        "@googletest//:gtest_main",
     ],
 )

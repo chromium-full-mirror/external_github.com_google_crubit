@@ -61,8 +61,8 @@ crubit_cc_test(
         "//support/rs_std:rs_alloc",
         "//support/rs_std:slice_ref",
         "//support/rs_std:vec",
-        "//testing/base/public:gunit_main",
         "@abseil-cpp//absl/types:span",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -74,7 +74,7 @@ crubit_ios_device_test(
         "//support/rs_std:rs_alloc",
         "//support/rs_std:slice_ref",
         "//support/rs_std:vec",
-        "//testing/base/public:gunit_main",
         "@abseil-cpp//absl/types:span",
+        "@googletest//:gtest_main",
     ],
 )

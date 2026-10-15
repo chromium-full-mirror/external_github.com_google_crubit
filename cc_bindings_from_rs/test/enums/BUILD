@@ -62,7 +62,7 @@ crubit_cc_test(
     ],
     deps = [
         ":enums_cc_api",
-        "//testing/base/public:gunit_main",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -71,7 +71,7 @@ crubit_ios_device_test(
     srcs = ["enums_test.cc"],
     deps = [
         ":enums_cc_api",
-        "//testing/base/public:gunit_main",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -112,7 +112,7 @@ crubit_cc_test(
     ],
     deps = [
         ":cpp_enums_cc_api",
-        "//testing/base/public:gunit_main",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -155,7 +155,7 @@ crubit_cc_test(
     deps = [
         ":option_cc_api",
         "//support/rs_std",
-        "//testing/base/public:gunit_main",
+        "@googletest//:gtest_main",
     ],
 )
 
@@ -198,6 +198,6 @@ crubit_cc_test(
     deps = [
         ":result_cc_api",
         "//support:movable",
-        "//testing/base/public:gunit_main",
+        "@googletest//:gtest_main",
     ],
 )
