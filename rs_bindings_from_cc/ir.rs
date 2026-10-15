@@ -2756,6 +2756,10 @@ impl<'pb> Record<'pb> {
                     || *defining_target
                         == BazelLabel::from(
                             "//third_party/crosstool/rust/stable/crubit/support/cc_std:cc_std",
+                        )
+                    || *defining_target
+                        == BazelLabel::from(
+                            "//third_party/crosstool/rust/stable_nonprod/crubit/support/cc_std:cc_std",
                         );
                 if is_in_cc_std {
                     let is_string_view = *kind == TemplateSpecializationKind::StdStringView

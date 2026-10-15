@@ -55,12 +55,16 @@ def _bindings_for_toolchain_headers_impl(ctx):
         ctx.attr.public_libcxx_hdrs,
     )
 
+    # TODO(b/498977848): Remove "no_assume_lifetimes" once stable_nonprod's
+    # Record::is_string_view() recognizes stable_nonprod's cc_std target.
+    cc_std_features = ["all"] + (
+    )
     target_args = depset(
         direct = [
             json.encode({
                 "t": str(ctx.label),
                 "h": [hdr.path for hdr in std_files + builtin_libcxx_files],
-                "f": ["all"],
+                "f": cc_std_features,
             }),
             json.encode({
                 "t": "//:_nothing_should_depend_on_private_builtin_hdrs",

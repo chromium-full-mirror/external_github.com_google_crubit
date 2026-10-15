@@ -119,9 +119,6 @@ def generate_bindings(
         ctx.file._rustfmt_cfg.path,
     ]
 
-    if ctx.attr._lazy_import_alien_decls[BuildSettingInfo].value:
-        rs_bindings_from_cc_flags.append("--lazy_import_alien_decls")
-
     if ctx.attr._generate_error_report[BuildSettingInfo].value:
         error_report_output = ctx.actions.declare_file(crate_name + "_rust_api_error_report.json")
         rs_bindings_from_cc_flags += [
@@ -145,6 +142,12 @@ def generate_bindings(
         return (cc_output, rs_output, namespaces_output, error_report_output)
 
     rs_bindings_from_cc_tool = toolchain.rs_bindings_from_cc_toolchain_info.binary
+
+    if (
+        ctx.attr._lazy_import_alien_decls[BuildSettingInfo].value and
+        # TODO(b/557392788): Remove once stable_nonprod includes cl/990634553.
+    ):
+        rs_bindings_from_cc_flags.append("--lazy_import_alien_decls")
 
     if ctx.attr._template_blocklist_path_regex[BuildSettingInfo].value:
         rs_bindings_from_cc_flags += [

@@ -16,6 +16,7 @@ def _rs_bindings_from_cc_toolchain_impl(ctx):
                 binary = ctx.file.binary,
                 builtin_headers = ctx.files.builtin_headers,
                 stl_headers = ctx.files.stl_headers,
+                unsupported_features = ctx.attr.unsupported_features,
             ),
         ),
     ]
@@ -30,5 +31,9 @@ rs_bindings_from_cc_toolchain = rule(
         ),
         "builtin_headers": attr.label_list(allow_files = True),
         "stl_headers": attr.label_list(allow_files = True),
+        "unsupported_features": attr.string_list(
+            default = [],
+            doc = "Features that are unsupported by this toolchain binary",
+        ),
     },
 )

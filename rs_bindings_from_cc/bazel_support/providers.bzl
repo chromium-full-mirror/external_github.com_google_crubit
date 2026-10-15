@@ -80,5 +80,6 @@ RustBindingsFromCcToolchainInfo = provider(
         "binary": "The label for the rs_bindings_from_cc binary",
         "builtin_headers": "The list of clang builtin headers.",
         "stl_headers": "The list of STL headers.",
+        "unsupported_features": "Features that are unsupported by this toolchain binary",
     },
 )

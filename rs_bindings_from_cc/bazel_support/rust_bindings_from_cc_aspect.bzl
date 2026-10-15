@@ -384,7 +384,8 @@ def _rust_bindings_from_cc_aspect_impl(target, ctx):
     # Headers for which we will produce bindings.
     public_hdrs = []
 
-    crubit_features = find_crubit_features(target, ctx)
+    unsupported_features = getattr(toolchain, "unsupported_features", []) if toolchain != None else []
+    crubit_features = [f for f in find_crubit_features(target, ctx) if f not in unsupported_features]
 
     extra_cpp_srcs = _get_additional_cpp_srcs(ctx)
 
