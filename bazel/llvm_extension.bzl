@@ -95,6 +95,33 @@ host_c_library = repository_rule(
     },
 )
 
+def _stub_llvm_raw_impl(repository_ctx):
+    repository_ctx.file("BUILD.bazel", """load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
+    name = "llvm_dev_date",
+    defines = ["CRUBIT_LLVM_DEV_DATE=0"],
+    visibility = ["//visibility:public"],
+)
+""")
+    repository_ctx.file("utils/bazel/BUILD.bazel")
+    repository_ctx.file("utils/bazel/configure.bzl", """
+def _stub_llvm_configure_impl(repository_ctx):
+    repository_ctx.file("BUILD.bazel")
+
+llvm_configure = repository_rule(
+    implementation = _stub_llvm_configure_impl,
+    attrs = {"targets": attr.string_list(default = [])},
+)
+""")
+
+stub_llvm_raw = repository_rule(implementation = _stub_llvm_raw_impl)
+
+def _empty_repo_impl(repository_ctx):
+    repository_ctx.file("BUILD.bazel")
+
+empty_repo = repository_rule(implementation = _empty_repo_impl)
+
 llvm_commit_tag = tag_class(
     attrs = {
         "commit": attr.string(mandatory = True),
@@ -104,17 +131,35 @@ llvm_commit_tag = tag_class(
 def _llvm_extension_impl(module_ctx):
     commit = None
 
-    # Prefer configuration from the root module, falling back to dependent modules.
+    # Check root module first.
     for mod in module_ctx.modules:
-        for cfg in mod.tags.configure:
-            if mod.is_root:
+        if mod.is_root:
+            for cfg in mod.tags.configure:
                 commit = cfg.commit
                 break
-            elif not commit:
-                commit = cfg.commit
+            break
+
+    # If the root module did not configure a commit, allow other non-root modules
+    # to configure it. Upstream rules_crubit is excluded when imported as a
+    # dependency because its MODULE.bazel registers a default pinned commit tag
+    # that would otherwise unconditionally trigger LLVM source downloads downstream.
+    if not commit:
+        for mod in module_ctx.modules:
+            if not mod.is_root and mod.name != "rules_crubit":
+                for cfg in mod.tags.configure:
+                    commit = cfg.commit
+                    break
+                if commit:
+                    break
 
     if not commit:
-        fail("Please configure LLVM commit via llvm_ext.configure(commit = ...)")
+        # Stub out LLVM so downstream projects avoid downloading the
+        # full source archive un-necessarily.
+        stub_llvm_raw(name = "llvm-raw")
+        empty_repo(name = "llvm_zlib")
+        empty_repo(name = "llvm_libxml2")
+        empty_repo(name = "llvm_zstd")
+        return
 
     # Fetch LLVM source
     llvm_source_fetch(name = "llvm-raw", commit = commit)
