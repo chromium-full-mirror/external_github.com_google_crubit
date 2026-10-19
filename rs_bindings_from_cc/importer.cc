@@ -77,15 +77,21 @@
 #include "clang/Basic/ABI.h"
 #include "clang/Basic/AttrKinds.h"
 #include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/FileEntry.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/OperatorKinds.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/Specifiers.h"
+#include "clang/Basic/TokenKinds.h"
+#include "clang/Lex/HeaderSearch.h"
+#include "clang/Lex/HeaderSearchOptions.h"
 #include "clang/Lex/Lexer.h"
+#include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/Sema.h"
 #include "clang/UnifiedSymbolResolution/USRGeneration.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -326,6 +332,7 @@ Importer::Importer(Invocation& invocation, clang::ASTContext& ctx,
       mangler_(ABSL_DIE_IF_NULL(ctx_.createMangleContext())),
       itanium_tag_name_mangler_(ABSL_DIE_IF_NULL(
           clang::ItaniumMangleContext::create(ctx_, ctx_.getDiagnostics()))),
+      module_comments_(ctx.getSourceManager()),
       rs_core_fmt_debug_(LookupRsCoreFmtDebug(&ctx)),
       rs_std_impl_(LookupCanonicalRsStdImpl(&ctx)) {
   decl_importers_.push_back(std::make_unique<ExistingRustTypeImporter>(*this));
@@ -412,10 +419,263 @@ class Importer::SourceOrderKey {
   std::string name_;
 };
 
+using RepresentativeCopyCache = Importer::RepresentativeCopyCache;
+
+// Returns the redeclaration of `decl` that is at the same position (file and
+// offset) as `decl` and that was parsed textually, if there is one, or else the
+// one that comes first in the translation unit.
+//
+// When a header is compiled into several precompiled header modules (e.g. a
+// standard library header, which is a textual header of every module that
+// includes it), or is both compiled into a module and parsed textually (e.g. a
+// header of the current target that is also a header of a dependency), each
+// copy of the header contains its own copy of the declarations in the header,
+// at different `SourceLocation`s. Clang merges the copies into one
+// redeclaration chain. This function maps all copies of a declaration to the
+// same representative copy: preferably the textual one, which is where the
+// comments are (precompiled modules don't contain ordinary comments), or else
+// the one from the first module in the translation unit, which is where the
+// header would have been first included without modules.
+//
+// The results are memoized in `cache`, for all the redeclarations of `decl` at
+// once: a namespace can have thousands of redeclarations (one per copy of each
+// header that reopens it), and this is called for each of them, so computing
+// each result separately would take quadratic time.
+static const clang::Decl* absl_nonnull GetRepresentativeCopy(
+    const clang::Decl* absl_nonnull decl, const clang::SourceManager& sm,
+    RepresentativeCopyCache& cache) {
+  if (auto it = cache.find(decl); it != cache.end()) return it->second;
+
+  using Position = std::pair<const clang::FileEntry*, unsigned>;
+  auto get_position = [&sm](const clang::Decl* d) -> std::optional<Position> {
+    auto [file_id, offset] = sm.getDecomposedExpansionLoc(d->getLocation());
+    clang::OptionalFileEntryRef file = sm.getFileEntryRefForID(file_id);
+    if (!file.has_value()) return std::nullopt;
+    return std::make_pair(&file->getFileEntry(), offset);
+  };
+  // Returns whether `a` is a better representative than `b`: textual copies
+  // come first, then copies that come first in the translation unit.
+  auto is_better = [&sm](const clang::Decl* a, const clang::Decl* b) {
+    bool a_is_textual = !a->isFromASTFile();
+    bool b_is_textual = !b->isFromASTFile();
+    if (a_is_textual != b_is_textual) return a_is_textual;
+    return sm.isBeforeInTranslationUnit(a->getLocation(), b->getLocation());
+  };
+
+  // Group the redeclarations by position, and find the best one of each group.
+  // Redeclarations without a position are their own representative.
+  absl::flat_hash_map<Position, const clang::Decl*> best_at_position;
+  std::vector<std::pair<const clang::Decl*, std::optional<Position>>> positions;
+  for (const clang::Decl* redecl : decl->redecls()) {
+    std::optional<Position> position = get_position(redecl);
+    positions.push_back({redecl, position});
+    if (!position.has_value()) continue;
+    auto [it, inserted] = best_at_position.try_emplace(*position, redecl);
+    if (!inserted && is_better(redecl, it->second)) it->second = redecl;
+  }
+  for (const auto& [redecl, position] : positions) {
+    cache[redecl] =
+        position.has_value() ? best_at_position.at(*position) : redecl;
+  }
+  // `decl` is always one of its own redeclarations, but don't rely on it.
+  auto [it, _] = cache.try_emplace(decl, decl);
+  return it->second;
+}
+
+// Returns the copy of `decl` whose source locations should be used for finding
+// comments and for ordering. See `GetRepresentativeCopy`.
+static const clang::Decl& GetDeclForSourceLocations(
+    const clang::Decl& decl, const clang::ASTContext& ast_context,
+    RepresentativeCopyCache& cache) {
+  // Without precompiled header modules there is only one copy of each
+  // declaration.
+  if (ast_context.getExternalSource() == nullptr) return decl;
+  return *GetRepresentativeCopy(&decl, ast_context.getSourceManager(), cache);
+}
+
+// Returns the locations where Clang looks for the comment attached to `decl`.
+//
+// This is a copy of `getLocsForCommentSearch` in clang/lib/AST/ASTContext.cpp
+// (minus Objective-C), which is not exposed by Clang.
+static llvm::SmallVector<clang::SourceLocation, 2> GetLocsForCommentSearch(
+    const clang::Decl& decl, const clang::SourceManager& sm) {
+  // User can not attach documentation to implicit declarations.
+  if (decl.isImplicit()) return {};
+
+  // User can not attach documentation to implicit instantiations.
+  if (const auto* function = clang::dyn_cast<clang::FunctionDecl>(&decl)) {
+    if (function->getTemplateSpecializationKind() ==
+        clang::TSK_ImplicitInstantiation) {
+      return {};
+    }
+  }
+  if (const auto* var = clang::dyn_cast<clang::VarDecl>(&decl)) {
+    if (var->isStaticDataMember() && var->getTemplateSpecializationKind() ==
+                                         clang::TSK_ImplicitInstantiation) {
+      return {};
+    }
+  }
+  if (const auto* record = clang::dyn_cast<clang::CXXRecordDecl>(&decl)) {
+    if (record->getTemplateSpecializationKind() ==
+        clang::TSK_ImplicitInstantiation) {
+      return {};
+    }
+  }
+  if (const auto* spec =
+          clang::dyn_cast<clang::ClassTemplateSpecializationDecl>(&decl)) {
+    clang::TemplateSpecializationKind kind = spec->getSpecializationKind();
+    if (kind == clang::TSK_ImplicitInstantiation ||
+        kind == clang::TSK_Undeclared) {
+      return {};
+    }
+  }
+  if (const auto* enum_decl = clang::dyn_cast<clang::EnumDecl>(&decl)) {
+    if (enum_decl->getTemplateSpecializationKind() ==
+        clang::TSK_ImplicitInstantiation) {
+      return {};
+    }
+  }
+  if (const auto* tag = clang::dyn_cast<clang::TagDecl>(&decl)) {
+    // When tag declaration (but not definition!) is part of the
+    // decl-specifier-seq of some other declaration, it doesn't get comment
+    if (tag->isEmbeddedInDeclarator() && !tag->isCompleteDefinition()) {
+      return {};
+    }
+  }
+  if (clang::isa<clang::ParmVarDecl, clang::TemplateTypeParmDecl,
+                 clang::NonTypeTemplateParmDecl,
+                 clang::TemplateTemplateParmDecl>(&decl)) {
+    return {};
+  }
+
+  // Declarations with multiple declarators are common, so we use the location
+  // of the identifier as the location of the declaration, except for these
+  // kinds of declarations.
+  clang::SourceLocation base_location =
+      clang::isa<clang::RedeclarableTemplateDecl,
+                 clang::ClassTemplateSpecializationDecl, clang::TypedefDecl>(
+          &decl)
+          ? decl.getBeginLoc()
+          : decl.getLocation();
+
+  llvm::SmallVector<clang::SourceLocation, 2> locations;
+  if (!decl.getLocation().isMacroID()) {
+    locations.push_back(base_location);
+  } else {
+    // For declarations generated by a macro (that are not contained by another
+    // declaration in the macro), look first at the expansion site, and then
+    // inside the macro.
+    const clang::DeclContext* decl_context = decl.getDeclContext();
+    if (!(decl_context && clang::Decl::castFromDeclContext(decl_context)
+                              ->getLocation()
+                              .isMacroID())) {
+      locations.push_back(sm.getExpansionLoc(base_location));
+    }
+    locations.push_back(sm.getSpellingLoc(decl.getBeginLoc()));
+  }
+  return locations;
+}
+
+// Returns the comment in `comments_in_file` (the comments in the file of
+// `location`, by offset) that is attached to `decl`, which is at `location`.
+//
+// This is a copy of `ASTContext::getRawCommentNoCacheImpl` (minus Objective-C
+// and macros), which is private.
+static clang::RawComment* absl_nullable GetRawCommentAtLocation(
+    const clang::Decl& decl, clang::SourceLocation location,
+    const std::map<unsigned, clang::RawComment*>& comments_in_file,
+    const clang::ASTContext& ast_context) {
+  if (location.isInvalid() || !location.isFileID()) return nullptr;
+  if (comments_in_file.empty()) return nullptr;
+  const clang::SourceManager& sm = ast_context.getSourceManager();
+  const bool parse_all_comments =
+      ast_context.getLangOpts().CommentOpts.ParseAllComments;
+  auto [file_id, offset] = sm.getDecomposedLoc(location);
+
+  // First check whether we have a trailing comment.
+  auto comment_behind_decl = comments_in_file.lower_bound(offset);
+  if (comment_behind_decl != comments_in_file.end()) {
+    clang::RawComment* comment = comment_behind_decl->second;
+    if ((comment->isDocumentation() || parse_all_comments) &&
+        comment->isTrailingComment() &&
+        clang::isa<clang::FieldDecl, clang::EnumConstantDecl, clang::VarDecl>(
+            &decl)) {
+      // Check that the trailing comment starts on the same line as the
+      // declaration.
+      if (sm.getLineNumber(file_id, offset) ==
+          sm.getLineNumber(file_id, comment_behind_decl->first)) {
+        return comment;
+      }
+    }
+  }
+
+  // The comment just after the declaration was not a trailing comment.
+  // Let's look at the previous comment.
+  if (comment_behind_decl == comments_in_file.begin()) return nullptr;
+  clang::RawComment* comment = std::prev(comment_behind_decl)->second;
+  if (!(comment->isDocumentation() || parse_all_comments) ||
+      comment->isTrailingComment()) {
+    return nullptr;
+  }
+
+  // There should be no other declarations or preprocessor directives between
+  // the comment and the declaration.
+  unsigned comment_end_offset =
+      sm.getDecomposedLoc(comment->getSourceRange().getEnd()).second;
+  bool invalid = false;
+  llvm::StringRef buffer = sm.getBufferData(file_id, &invalid);
+  if (invalid || comment_end_offset > offset) return nullptr;
+  llvm::StringRef text =
+      buffer.substr(comment_end_offset, offset - comment_end_offset);
+  if (text.find_last_of(";{}#@") != llvm::StringRef::npos) return nullptr;
+  return comment;
+}
+
+// Returns the source range used for ordering `decl`.
+//
+// With header modules, `decl` may be a copy of a declaration that is not where
+// the comments are, so we use the range of the representative copy instead (see
+// `GetRepresentativeCopy`).
+//
+// For an implicit instantiation, `getSourceRange()` is the range of the
+// template (or partial specialization) that it was instantiated from. With
+// header modules, instantiations of the same template may refer to different
+// copies of it, so we use the range of the representative copy of the template
+// instead. Otherwise the order of the instantiations would depend on which
+// module each of them was loaded from.
+static clang::SourceRange GetSourceRangeForOrdering(
+    const clang::Decl& decl, const clang::ASTContext& ast_context,
+    RepresentativeCopyCache& cache) {
+  // Without precompiled header modules there is only one copy of each
+  // declaration.
+  if (ast_context.getExternalSource() == nullptr) return decl.getSourceRange();
+  const auto* spec =
+      clang::dyn_cast<clang::ClassTemplateSpecializationDecl>(&decl);
+  if (spec == nullptr ||
+      clang::isa<clang::ClassTemplatePartialSpecializationDecl>(spec) ||
+      (spec->getSpecializationKind() != clang::TSK_ImplicitInstantiation &&
+       spec->getSpecializationKind() != clang::TSK_Undeclared)) {
+    return GetDeclForSourceLocations(decl, ast_context, cache).getSourceRange();
+  }
+  auto pattern = spec->getSpecializedTemplateOrPartial();
+  const clang::Decl* pattern_decl = nullptr;
+  if (auto* partial =
+          pattern.dyn_cast<clang::ClassTemplatePartialSpecializationDecl*>()) {
+    pattern_decl = partial;
+  } else {
+    pattern_decl = pattern.dyn_cast<clang::ClassTemplateDecl*>();
+  }
+  if (pattern_decl == nullptr) return decl.getSourceRange();
+  return GetRepresentativeCopy(pattern_decl, ast_context.getSourceManager(),
+                               cache)
+      ->getSourceRange();
+}
+
 Importer::SourceOrderKey Importer::GetSourceOrderKey(
     const clang::Decl& decl) const {
-  return SourceOrderKey(decl.getSourceRange(), GetDeclOrder(decl),
-                        GetNameForSourceOrder(decl));
+  return SourceOrderKey(
+      GetSourceRangeForOrdering(decl, ctx_, representative_copy_cache_),
+      GetDeclOrder(decl), GetNameForSourceOrder(decl));
 }
 
 Importer::SourceOrderKey Importer::GetSourceOrderKey(
@@ -479,7 +739,10 @@ std::vector<clang::Decl*> Importer::GetCanonicalChildren(
     if (const auto* enum_decl = llvm::dyn_cast<clang::EnumDecl>(decl)) {
       if (enum_decl->getName().empty()) {
         for (clang::EnumConstantDecl* enumerator : enum_decl->enumerators()) {
-          result.push_back(enumerator);
+          // Skip enumerators that are unmerged duplicates of others.
+          if (CanonicalizeDecl(enumerator) == enumerator) {
+            result.push_back(enumerator);
+          }
         }
         continue;
       }
@@ -527,6 +790,113 @@ std::vector<clang::Decl*> Importer::GetCanonicalChildren(
 }
 
 const clang::Decl* absl_nullable Importer::CanonicalizeDecl(
+    const clang::Decl& decl) const {
+  const clang::Decl* canonical = CanonicalizeDeclInRedeclChain(decl);
+  if (canonical == nullptr) return nullptr;
+  return CanonicalizeUnmergedDuplicates(canonical);
+}
+
+const clang::Decl* absl_nonnull Importer::CanonicalizeUnmergedDuplicates(
+    const clang::Decl* absl_nonnull decl) const {
+  // Unmerged duplicates can only come from precompiled header modules.
+  if (ctx_.getExternalSource() == nullptr) return decl;
+
+  // Clang merges namespaces into one redeclaration chain, and also tags,
+  // functions and variables with external linkage. (Tags have no linkage only
+  // in anonymous namespaces, which are not supported.)
+  //
+  // Functions with internal linkage are not merged, but they are not
+  // deduplicated here either: both copies are visible in the generated C++
+  // code, where taking the address of the function would be ambiguous. Instead,
+  // they are treated like overloads, which are not bound.
+  const auto* named_decl = clang::dyn_cast<clang::NamedDecl>(decl);
+  if (named_decl == nullptr || !named_decl->getDeclName() ||
+      clang::isa<clang::NamespaceDecl, clang::TagDecl, clang::FunctionDecl,
+                 clang::FunctionTemplateDecl>(decl)) {
+    return decl;
+  }
+  // Only declarations at namespace scope can be duplicated this way (members of
+  // merged classes and enums come from the one definition of the class or
+  // enum). The exception are enumerators of anonymous enums, which are not
+  // merged, and which are imported as if they were declared in the enclosing
+  // namespace (see `GetCanonicalChildren`).
+  if (const auto* enum_decl =
+          clang::dyn_cast<clang::EnumDecl>(named_decl->getDeclContext());
+      enum_decl != nullptr && !enum_decl->getName().empty()) {
+    return decl;
+  }
+  const clang::DeclContext* lookup_context =
+      named_decl->getDeclContext()->getRedeclContext();
+  if (!lookup_context->isFileContext()) return decl;
+
+  if (auto it = unmerged_duplicates_cache_.find(decl);
+      it != unmerged_duplicates_cache_.end()) {
+    return it->second;
+  }
+
+  // Pick a representative among all the declarations of the same entity, in a
+  // way that doesn't depend on which of them we started from: the first one in
+  // lookup order that was parsed textually (because declarations loaded from a
+  // module may lack comments), or else the first one in lookup order.
+  const clang::Decl* first_textual = nullptr;
+  const clang::Decl* first = nullptr;
+  bool found_self = false;
+  for (const clang::NamedDecl* candidate :
+       lookup_context->lookup(named_decl->getDeclName())) {
+    if (candidate->isInvalidDecl() ||
+        !ctx_.isSameEntity(candidate, named_decl)) {
+      continue;
+    }
+    const clang::Decl* canonical_candidate =
+        CanonicalizeDeclInRedeclChain(*candidate);
+    if (canonical_candidate == nullptr) continue;
+    if (canonical_candidate == decl) found_self = true;
+    if (first == nullptr) first = canonical_candidate;
+    if (first_textual == nullptr && !canonical_candidate->isFromASTFile()) {
+      first_textual = canonical_candidate;
+    }
+  }
+  const clang::Decl* representative = decl;
+  // If `decl` itself isn't found by lookup, we can't tell how it relates to the
+  // declarations that are, so leave it alone.
+  if (found_self) {
+    // `first` isn't null, since lookup found `decl` itself.
+    representative =
+        first_textual != nullptr ? first_textual : ABSL_DIE_IF_NULL(first);
+  }
+  unmerged_duplicates_cache_[decl] = representative;
+  return representative;
+}
+
+// If `decl` is lexically declared in a class definition that Clang demoted to
+// a declaration when merging it with an equivalent definition from another
+// (header) module, returns the redeclaration of `decl` that is lexically
+// declared in the kept definition. Otherwise returns `decl`.
+//
+// When the same class (e.g. an implicit instantiation like
+// `std::allocator<std::string>`) is defined in several modules, Clang keeps one
+// definition and merges each member of the other definitions into the
+// redeclaration chain of the corresponding member of the kept definition. The
+// canonical declaration of a member may thus be lexically inside a demoted
+// definition, which we never visit (we only visit the children of the kept
+// definition).
+static const clang::Decl* absl_nonnull PreferMemberOfKeptDefinition(
+    const clang::Decl* absl_nonnull decl) {
+  const auto* lexical_record =
+      clang::dyn_cast<clang::TagDecl>(decl->getLexicalDeclContext());
+  if (lexical_record == nullptr ||
+      !lexical_record->isThisDeclarationADemotedDefinition()) {
+    return decl;
+  }
+  const clang::TagDecl* definition = lexical_record->getDefinition();
+  if (definition == nullptr) return decl;
+  for (const clang::Decl* redecl : decl->redecls()) {
+    if (redecl->getLexicalDeclContext() == definition) return redecl;
+  }
+  return decl;
+}
+
+const clang::Decl* absl_nullable Importer::CanonicalizeDeclInRedeclChain(
     const clang::Decl& decl_ref) const {
   const clang::Decl* decl = &decl_ref;
   if (auto* namespace_decl = llvm::dyn_cast<clang::NamespaceDecl>(decl)) {
@@ -590,7 +960,7 @@ const clang::Decl* absl_nullable Importer::CanonicalizeDecl(
   }
   if (const auto* function_decl = llvm::dyn_cast<clang::FunctionDecl>(decl)) {
     if (llvm::isa<clang::CXXMethodDecl>(function_decl)) {
-      return function_decl->getCanonicalDecl();
+      return PreferMemberOfKeptDefinition(function_decl->getCanonicalDecl());
     }
     const auto* canonical = function_decl->getCanonicalDecl();
     if (canonical->getLexicalDeclContext()->isRecord()) {
@@ -602,7 +972,7 @@ const clang::Decl* absl_nullable Importer::CanonicalizeDecl(
     }
     return canonical;
   }
-  return decl->getCanonicalDecl();
+  return PreferMemberOfKeptDefinition(decl->getCanonicalDecl());
 }
 
 clang::Decl* absl_nullable Importer::CanonicalizeDecl(
@@ -689,9 +1059,25 @@ Importer::DeclItems Importer::GetDeclItems(const clang::Decl& decl) {
   auto compare_locations = SourceLocationComparator(sm);
 
   // We are only interested in comments within this decl context.
-  std::vector<const clang::RawComment*> comments_in_range(
-      llvm::lower_bound(comments_, decl.getBeginLoc(), compare_locations),
-      llvm::upper_bound(comments_, decl.getEndLoc(), compare_locations));
+  //
+  // With header modules, there can be several copies of the same namespace
+  // block (one per module that contains the header), which all have the same
+  // representative copy. Only the representative copy gets the comments, so
+  // that they are not repeated.
+  //
+  // The locations are translated to the copy of the header that `comments_`
+  // are in (see `TranslateToCommentFile`).
+  const clang::Decl& decl_for_locations =
+      GetDeclForSourceLocations(decl, ctx_, representative_copy_cache_);
+  std::vector<const clang::RawComment*> comments_in_range;
+  if (&decl_for_locations == &decl ||
+      !clang::isa<clang::NamespaceDecl>(&decl)) {
+    comments_in_range.assign(
+        llvm::lower_bound(comments_, TranslateToCommentFile(decl.getBeginLoc()),
+                          compare_locations),
+        llvm::upper_bound(comments_, TranslateToCommentFile(decl.getEndLoc()),
+                          compare_locations));
+  }
 
   std::map<clang::SourceLocation, const clang::RawComment*,
            SourceLocationComparator>
@@ -700,6 +1086,25 @@ Importer::DeclItems Importer::GetDeclItems(const clang::Decl& decl) {
     if (IsFilteredComment(sm, *comment)) continue;
     ordered_comments.insert({comment->getBeginLoc(), comment});
   }
+
+  // We remove comments attached to a child decl or that are within a child
+  // decl.
+  auto erase_comments_of_child = [&](const clang::Decl& child) {
+    if (auto raw_comment = GetRawComment(child)) {
+      ordered_comments.erase(
+          TranslateToCommentFile(raw_comment->getBeginLoc()));
+    }
+    // Implicit decls can have an inverted source range: e.g. the implicit copy
+    // deduction guide of a class template that is declared more than once can
+    // begin at the `template` keyword of its most recent declaration, but end
+    // at the name of an earlier one. Erasing an inverted range is UB.
+    clang::SourceLocation begin = TranslateToCommentFile(child.getBeginLoc());
+    clang::SourceLocation end = TranslateToCommentFile(child.getEndLoc());
+    if (child.getLocation().isValid() && !compare_locations(end, begin)) {
+      ordered_comments.erase(ordered_comments.lower_bound(begin),
+                             ordered_comments.upper_bound(end));
+    }
+  };
 
   absl::flat_hash_set<ItemId> visited_item_ids;
 
@@ -723,23 +1128,25 @@ Importer::DeclItems Importer::GetDeclItems(const clang::Decl& decl) {
       }
     }
 
-    // We remove comments attached to a child decl or that are within a child
-    // decl.
-#if LLVM_DEV_DATE_GE(20260527)
-    if (auto raw_comment = ctx_.getRawCommentNoCache(decl)) {
-#else
-    if (auto raw_comment = ctx_.getRawCommentForDeclNoCache(decl)) {
-#endif
-      ordered_comments.erase(raw_comment->getBeginLoc());
-    }
-    // Implicit decls can have an inverted source range: e.g. the implicit copy
-    // deduction guide of a class template that is declared more than once can
-    // begin at the `template` keyword of its most recent declaration, but end
-    // at the name of an earlier one. Erasing an inverted range is UB.
-    if (decl->getLocation().isValid() &&
-        !compare_locations(decl->getEndLoc(), decl->getBeginLoc())) {
-      ordered_comments.erase(ordered_comments.lower_bound(decl->getBeginLoc()),
-                             ordered_comments.upper_bound(decl->getEndLoc()));
+    erase_comments_of_child(*decl);
+  }
+
+  // With header modules, the children of the other copies of this namespace
+  // block (which are not in `decl.decls()` if `CanonicalizeDecl` picked a
+  // declaration from another copy) also have their comments in
+  // `ordered_comments`.
+  if (!ordered_comments.empty() && ctx_.getExternalSource() != nullptr &&
+      clang::isa<clang::NamespaceDecl>(&decl)) {
+    for (const clang::Decl* redecl : decl.redecls()) {
+      if (redecl == &decl || &GetDeclForSourceLocations(
+                                 *redecl, ctx_, representative_copy_cache_) !=
+                                 &decl_for_locations) {
+        continue;
+      }
+      for (const clang::Decl* child :
+           GetCanonicalChildren(*clang::cast<clang::DeclContext>(redecl))) {
+        erase_comments_of_child(*child);
+      }
     }
   }
 
@@ -980,11 +1387,173 @@ std::vector<ItemId> Importer::GetOrderedItemIdsOfTemplateInstantiations()
   return ordered_item_ids;
 }
 
+clang::FileID Importer::GetFirstLoadedFileID(clang::FileEntryRef file) const {
+  const clang::SourceManager& sm = ctx_.getSourceManager();
+  clang::SourceLocation first;
+  for (unsigned i = 0, n = sm.loaded_sloc_entry_size(); i != n; ++i) {
+    const clang::SrcMgr::SLocEntry& entry = sm.getLoadedSLocEntry(i);
+    if (!entry.isFile()) continue;
+    clang::OptionalFileEntryRef entry_file =
+        entry.getFile().getContentCache().OrigEntry;
+    if (!entry_file.has_value() ||
+        &entry_file->getFileEntry() != &file.getFileEntry()) {
+      continue;
+    }
+    clang::SourceLocation start =
+        clang::SourceLocation::getFromRawEncoding(entry.getOffset());
+    if (first.isInvalid() || sm.isBeforeInTranslationUnit(start, first)) {
+      first = start;
+    }
+  }
+  if (first.isInvalid()) return clang::FileID();
+  return sm.getFileID(first);
+}
+
+const std::map<unsigned, clang::RawComment*>* absl_nullable
+Importer::GetModuleCommentsInFile(clang::FileID file) const {
+  clang::SourceManager& sm = ctx_.getSourceManager();
+  if (module_comment_files_.insert(file).second) {
+    // This mirrors what the preprocessor and `Sema::ActOnComment` do when the
+    // file is parsed textually, except that comments in blocks skipped by
+    // conditional compilation (e.g. `#if 0`) are not skipped.
+    const clang::CommentOptions& comment_options =
+        ctx_.getLangOpts().CommentOpts;
+    std::optional<llvm::MemoryBufferRef> buffer = sm.getBufferOrNone(file);
+    if (buffer.has_value() &&
+        (comment_options.RetainCommentsFromSystemHeaders ||
+         !IsInSystemHeader(sm.getLocForStartOfFile(file)))) {
+      clang::Lexer lexer(file, *buffer, sm, ctx_.getLangOpts());
+      lexer.SetCommentRetentionState(true);
+      clang::Token token;
+      while (true) {
+        bool at_end = lexer.LexFromRawLexer(token);
+        if (token.is(clang::tok::comment)) {
+          module_comments_.addComment(
+              clang::RawComment(
+                  sm,
+                  clang::SourceRange(token.getLocation(), token.getEndLoc()),
+                  comment_options, /*Merged=*/false),
+              comment_options, module_comments_allocator_);
+        }
+        if (at_end || token.is(clang::tok::eof)) break;
+      }
+    }
+  }
+  return module_comments_.getCommentsInFile(file);
+}
+
+const clang::RawComment* absl_nullable Importer::GetRawComment(
+    const clang::Decl& decl) const {
+  const clang::Decl& decl_for_locations =
+      GetDeclForSourceLocations(decl, ctx_, representative_copy_cache_);
+  // Without precompiled header modules, all comments are in `ctx_.Comments`.
+  if (ctx_.getExternalSource() == nullptr) {
+#if LLVM_DEV_DATE_GE(20260527)
+    return ctx_.getRawCommentNoCache(&decl_for_locations);
+#else
+    return ctx_.getRawCommentForDeclNoCache(&decl_for_locations);
+#endif
+  }
+  const clang::SourceManager& sm = ctx_.getSourceManager();
+  for (clang::SourceLocation location :
+       GetLocsForCommentSearch(decl_for_locations, sm)) {
+    if (location.isInvalid() || !location.isFileID()) continue;
+    clang::FileID file = sm.getFileID(location);
+    if (file.isInvalid()) continue;
+    const std::map<unsigned, clang::RawComment*>* comments_in_file =
+        sm.isLoadedFileID(file) ? GetModuleCommentsInFile(file)
+                                : ctx_.Comments.getCommentsInFile(file);
+    if (comments_in_file == nullptr) continue;
+    if (const clang::RawComment* comment = GetRawCommentAtLocation(
+            decl_for_locations, location, *comments_in_file, ctx_)) {
+      return comment;
+    }
+  }
+  return nullptr;
+}
+
+bool Importer::IsInSystemHeader(clang::SourceLocation location) const {
+  const clang::SourceManager& sm = ctx_.getSourceManager();
+  if (location.isInvalid()) return false;
+  location = sm.getExpansionLoc(location);
+  bool is_in_system_header = sm.isInSystemHeader(location);
+  if (!sm.isLoadedSourceLocation(location)) return is_in_system_header;
+  // The file was loaded from a precompiled header module. Apply the
+  // `--system-header-prefix` and `--no-system-header-prefix` options like
+  // `HeaderSearch::LookupFile` does when the file is included textually: the
+  // last matching option wins.
+  std::optional<llvm::StringRef> filename =
+      sm.getNonBuiltinFilenameForID(sm.getFileID(location));
+  if (!filename.has_value()) return is_in_system_header;
+  filename->consume_front("./");
+  const auto& prefixes = sema_.getPreprocessor()
+                             .getHeaderSearchInfo()
+                             .getHeaderSearchOpts()
+                             .SystemHeaderPrefixes;
+  for (auto it = prefixes.rbegin(); it != prefixes.rend(); ++it) {
+    if (filename->starts_with(it->Prefix)) return it->IsSystemHeader;
+  }
+  return is_in_system_header;
+}
+
+clang::SourceLocation Importer::TranslateToCommentFile(
+    clang::SourceLocation location) const {
+  if (comment_file_ids_.empty() || location.isInvalid()) return location;
+  const clang::SourceManager& sm = ctx_.getSourceManager();
+  auto [file_id, offset] = sm.getDecomposedExpansionLoc(location);
+  clang::OptionalFileEntryRef file = sm.getFileEntryRefForID(file_id);
+  if (!file.has_value()) return location;
+  auto it = comment_file_ids_.find(&file->getFileEntry());
+  if (it == comment_file_ids_.end() || it->second == file_id) return location;
+  return sm.getComposedLoc(it->second, offset);
+}
+
 void Importer::ImportFreeComments() {
   clang::SourceManager& sm = ctx_.getSourceManager();
+  // With header modules, the files that contain top-level declarations that
+  // were parsed textually (i.e. that are not from a module). Implicit
+  // `ImportDecl`s (for `#include`s translated to module imports) don't count:
+  // a textual copy that was skipped by its include guard can still contain
+  // them.
+  llvm::DenseSet<clang::FileID> files_with_textual_decls;
+  if (ctx_.getExternalSource() != nullptr) {
+    for (const clang::Decl* decl : ctx_.getTranslationUnitDecl()->decls()) {
+      if (decl->isFromASTFile() || decl->getLocation().isInvalid() ||
+          clang::isa<clang::ImportDecl>(decl)) {
+        continue;
+      }
+      files_with_textual_decls.insert(
+          sm.getFileID(sm.getExpansionLoc(decl->getLocation())));
+    }
+  }
   for (const auto& header : invocation_.public_headers_) {
     if (auto file = sm.getFileManager().getFileRef(
             StringRefFromStringView(header.IncludePath()))) {
+      // If the header was only loaded from precompiled header modules, use the
+      // same copy of it as `GetRepresentativeCopy`.
+      if (ctx_.getExternalSource() != nullptr) {
+        // The textual copy of the header can be (almost) empty, if a module
+        // that was imported earlier defined its include guard. Then the
+        // representative copies of its declarations (and its comments) are in
+        // a module.
+        clang::FileID file_id = sm.translateFile(*file);
+        if (file_id.isValid() && !sm.isLoadedFileID(file_id) &&
+            files_with_textual_decls.contains(file_id)) {
+          comment_file_ids_[&file->getFileEntry()] = file_id;
+        } else {
+          clang::FileID loaded_file_id = GetFirstLoadedFileID(*file);
+          if (loaded_file_id.isValid()) {
+            comment_file_ids_[&file->getFileEntry()] = loaded_file_id;
+            if (auto comments_in_file =
+                    GetModuleCommentsInFile(loaded_file_id)) {
+              for (const auto& [_, comment] : *comments_in_file) {
+                comments_.push_back(comment);
+              }
+            }
+            continue;
+          }
+        }
+      }
       if (auto comments_in_file = ctx_.Comments.getCommentsInFile(
               sm.getOrCreateFileID(*file, clang::SrcMgr::C_User))) {
         for (const auto& [_, comment] : *comments_in_file) {
@@ -2229,11 +2798,7 @@ std::optional<std::string> Importer::GetComment(const clang::Decl& decl) const {
   // This is going to be a heuristic that needs to be tuned over time.
 
   clang::SourceManager& sm = ctx_.getSourceManager();
-#if LLVM_DEV_DATE_GE(20260527)
-  clang::RawComment* raw_comment = ctx_.getRawCommentNoCache(&decl);
-#else
-  clang::RawComment* raw_comment = ctx_.getRawCommentForDeclNoCache(&decl);
-#endif
+  const clang::RawComment* raw_comment = GetRawComment(decl);
 
   if (raw_comment == nullptr) {
     return {};
@@ -3034,11 +3599,19 @@ absl::StatusOr<CcType> Importer::ConvertUnattributedType(
         return absl::UnimplementedError("Unsupported builtin type");
     }
   } else if (const auto* tag_type = type.getAsAdjusted<clang::TagType>()) {
-    return ConvertTypeDecl(tag_type->getDecl()->getDefinitionOrSelf());
+    // With precompiled header modules, the definition may come from a module
+    // that was loaded, but not imported by the headers of the current target.
+    // Such a definition can't be used in the generated C++ code, so the type is
+    // treated as incomplete instead (see also `CXXRecordDeclImporter::Import`).
+    clang::TagDecl* tag_decl = tag_type->getDecl();
+    if (clang::TagDecl* definition = tag_decl->getDefinition();
+        definition != nullptr && sema_.hasReachableDefinition(definition)) {
+      tag_decl = definition;
+    }
+    return ConvertTypeDecl(tag_decl);
   } else if (const auto* typedef_type =
                  type.getAsAdjusted<clang::TypedefType>()) {
-    if (!ctx_.getSourceManager().isInSystemHeader(
-            typedef_type->getDecl()->getLocation()) &&
+    if (!IsInSystemHeader(typedef_type->getDecl()->getLocation()) &&
         EnsureSuccessfullyImported(typedef_type->getDecl())) {
       return ConvertTypeDecl(typedef_type->getDecl());
     }
