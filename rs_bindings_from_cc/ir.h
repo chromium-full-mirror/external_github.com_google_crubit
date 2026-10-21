@@ -35,6 +35,7 @@
 #include "common/strong_int.h"
 #include "rs_bindings_from_cc/bazel_types.h"
 #include "rs_bindings_from_cc/ir.pb.h"
+#include "rs_bindings_from_cc/ir_generated.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/RawCommentList.h"
 #include "llvm/ADT/APSInt.h"
@@ -59,20 +60,22 @@ inline constexpr absl::string_view kInstantiationsNamespaceName =
 // A name of a public header of the C++ library.
 class HeaderName {
  public:
-  explicit HeaderName(std::string name) : name_(std::move(name)) {}
+  explicit HeaderName(std::string name) { inner_.set_name(std::move(name)); }
 
-  absl::string_view IncludePath() const { return name_; }
+  absl::string_view IncludePath() const { return inner_.name(); }
+
+  const ffi::HeaderName& AsFfi() const { return inner_; }
 
   void WriteToProto(ir_proto::HeaderName& proto) const;
 
   template <typename H>
   friend H AbslHashValue(H h, const HeaderName& header_name) {
-    return H::combine(std::move(h), header_name.name_);
+    return H::combine(std::move(h), header_name.IncludePath());
   }
 
  private:
   // Header pathname in the format suitable for a quote include.
-  std::string name_;
+  ffi::HeaderName inner_;
 };
 
 inline bool operator==(const HeaderName& lhs, const HeaderName& rhs) {

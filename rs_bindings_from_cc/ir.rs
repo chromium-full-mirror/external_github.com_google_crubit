@@ -25,6 +25,8 @@ use std::fmt::{self, Debug, Display};
 use std::hash::Hash;
 use std::rc::Rc;
 
+pub mod ir_ffi_support;
+pub mod ir_generated;
 mod proto_to_ir;
 pub use proto_to_ir::proto_to_ir;
 
@@ -399,26 +401,30 @@ macro_rules! derive_debug_partialeq_eq_hash {
     };
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct HeaderName<'pb> {
-    pub(crate) name: &'pb str,
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub struct HeaderName {
+    pub name: Rc<str>,
+}
+
+impl HeaderName {
+    pub fn from_str(name: &str) -> Self {
+        Self { name: Rc::from(name) }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 impl<'pb> ProtoToIr for HeaderNameView<'pb> {
-    type IrType = HeaderName<'pb>;
+    type IrType = HeaderName;
 
     fn validate(self) -> Result<()> {
         self.name().validate()
     }
 
-    fn to_ir(self) -> HeaderName<'pb> {
-        HeaderName { name: self.name().to_ir() }
-    }
-}
-
-impl<'pb> HeaderName<'pb> {
-    pub fn name(&self) -> &'pb str {
-        self.name
+    fn to_ir(self) -> HeaderName {
+        HeaderName::from_str(self.name().to_ir())
     }
 }
 
@@ -4503,7 +4509,7 @@ impl<'a, 'pb> TryFrom<&'a Item<'pb>> for &'a Rc<ExistingRustType<'pb>> {
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct TreeIR<'pb> {
-    pub public_headers: Vec<HeaderName<'pb>>,
+    pub public_headers: Vec<HeaderName>,
     pub current_target: BazelLabel,
     pub crate_root_path: Option<Rc<str>>,
     pub crubit_features: BTreeMap<BazelLabel, crubit_feature::SerializedCrubitFeatures>,
@@ -4614,7 +4620,7 @@ impl<'pb> IR<'pb> {
         &self.tree_ir.reexported_namespaces
     }
 
-    pub fn public_headers(&self) -> impl Iterator<Item = &HeaderName<'pb>> {
+    pub fn public_headers(&self) -> impl Iterator<Item = &HeaderName> {
         self.tree_ir.public_headers.iter()
     }
 
@@ -4820,7 +4826,7 @@ mod tests {
         });
         let ir = proto_to_ir(proto.as_view()).unwrap();
         let expected = TreeIR {
-            public_headers: vec![HeaderName { name: "foo/bar.h" }],
+            public_headers: vec![HeaderName::from_str("foo/bar.h")],
             current_target: "//foo:bar".into(),
             crate_root_path: None,
             crubit_features: Default::default(),

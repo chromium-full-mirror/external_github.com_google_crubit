@@ -112,7 +112,7 @@ CcType CcType::RValueReferenceTo(CcType pointee_type,
 }
 
 void HeaderName::WriteToProto(ir_proto::HeaderName& proto) const {
-  proto.set_name(name_);
+  proto.set_name(IncludePath());
 }
 
 void FormattedError::WriteToProto(ir_proto::FormattedError& proto) const {

@@ -329,4 +329,32 @@ mod tests {
         r2.set_rs_name(Identifier::try_from(r2_name_proto.as_view()).unwrap());
         let _ = make_ir_from_items([Item::Record(Rc::new(r1)), Item::Record(Rc::new(r2))]);
     }
+
+    #[gtest]
+    fn test_in_memory_ffi_ir_from_cc() {
+        unsafe extern "C" {
+            fn crubit_test_make_ffi_ir() -> ir::ir_generated::IRProto;
+        }
+        let ir_proto = unsafe { crubit_test_make_ffi_ir() };
+        let view = ir_proto.as_view();
+        assert_eq!(view.current_target(), "//test:target");
+        assert_eq!(view.public_headers().len(), 2);
+        assert_eq!(view.public_headers().get(0).unwrap().name(), "foo.h");
+        assert_eq!(view.public_headers().get(1).unwrap().name(), "bar.h");
+        let top_level_items: Vec<_> = view.top_level_items().iter().collect();
+        assert_eq!(top_level_items.len(), 1);
+        assert_eq!(top_level_items[0].0, "//test:target");
+        assert_eq!(top_level_items[0].1.len(), 1);
+        let item = top_level_items[0].1.get(0).unwrap();
+        let ir::ir_generated::ItemView::Func(func) = item else {
+            panic!("Expected Func item");
+        };
+        assert_eq!(func.id(), 42);
+        assert!(func.is_inline());
+        assert_eq!(func.unique_name(), "c:@F@root_node");
+        let ir::ir_generated::UnqualifiedIdentifierView::Oper(op) = func.rs_name() else {
+            panic!("Expected Oper identifier");
+        };
+        assert_eq!(op.name(), "+=");
+    }
 }
