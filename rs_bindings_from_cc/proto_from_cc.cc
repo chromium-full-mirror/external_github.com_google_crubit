@@ -2,11 +2,16 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include <optional>
+#include <utility>
+
 #include "absl/status/statusor.h"
 #include "common/ffi_types.h"
 #include "rs_bindings_from_cc/cmdline_flags.h"
 #include "rs_bindings_from_cc/ir.h"
+#include "rs_bindings_from_cc/ir_ffi_support.h"
 #include "rs_bindings_from_cc/ir_from_cc_dependency.h"
+#include "rs_bindings_from_cc/ir_generated.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
 
@@ -29,6 +34,26 @@ extern "C" FfiU8SliceBox proto_from_cc_dependency(
                                            ir.status().message()));
   }
   return AllocFfiU8SliceBox(MakeFfiU8Slice(ir->SerializeAsString()));
+}
+
+extern "C" ffi::FfiTestNode crubit_test_make_ffi_node() {
+  ffi::FfiTestNode child{
+      .id = 100,
+      .is_inline = false,
+      .label = std::nullopt,
+      .kind = ffi::UnqualifiedIdentifier::Constructor(),
+      .headers = {},
+      .children = {},
+  };
+  return ffi::FfiTestNode{
+      .id = 42,
+      .is_inline = true,
+      .label = ffi::FfiStr("root_node"),
+      .kind = ffi::UnqualifiedIdentifier::Operator(
+          ffi::Operator{.name = ffi::FfiStr("+=")}),
+      .headers = {HeaderName("foo.h").AsFfi(), HeaderName("bar.h").AsFfi()},
+      .children = {ffi::FfiRc<ffi::FfiTestNode>(std::move(child))},
+  };
 }
 
 }  // namespace crubit

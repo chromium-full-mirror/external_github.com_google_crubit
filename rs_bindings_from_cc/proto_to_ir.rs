@@ -16,7 +16,7 @@ fn opt_str_to_str<'a>(
     opt_s.into().map(|s| s.to_str()).transpose().map_err(Into::into)
 }
 
-impl<'pb> TryFrom<::ir_rust_proto::HeaderNameView<'pb>> for HeaderName<'pb> {
+impl<'pb> TryFrom<::ir_rust_proto::HeaderNameView<'pb>> for HeaderName {
     type Error = Error;
     fn try_from(proto: ::ir_rust_proto::HeaderNameView<'pb>) -> Result<Self> {
         proto.validate()?;

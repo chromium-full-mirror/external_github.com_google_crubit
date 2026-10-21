@@ -329,4 +329,31 @@ mod tests {
         r2.set_rs_name(Identifier::try_from(r2_name_proto.as_view()).unwrap());
         let _ = make_ir_from_items([Item::Record(Rc::new(r1)), Item::Record(Rc::new(r2))]);
     }
+
+    #[gtest]
+    fn test_in_memory_ffi_node_from_cc() {
+        unsafe extern "C" {
+            fn crubit_test_make_ffi_node() -> ir::ir_generated::FfiTestNode;
+        }
+        let node = unsafe { crubit_test_make_ffi_node() };
+        assert_eq!(node.id(), 42);
+        assert!(node.is_inline());
+        assert_eq!(node.label(), Some("root_node"));
+        assert_eq!(
+            node.kind(),
+            &ir::ir_generated::UnqualifiedIdentifier::Operator(
+                ir::ir_generated::Operator::from_str("+=")
+            )
+        );
+        assert_eq!(
+            node.headers(),
+            &[ir::HeaderName::from_str("foo.h"), ir::HeaderName::from_str("bar.h")]
+        );
+        assert_eq!(node.children().len(), 1);
+        let child = &node.children()[0];
+        assert_eq!(child.id(), 100);
+        assert!(!child.is_inline());
+        assert_eq!(child.label(), None);
+        assert_eq!(child.kind(), &ir::ir_generated::UnqualifiedIdentifier::Constructor);
+    }
 }
