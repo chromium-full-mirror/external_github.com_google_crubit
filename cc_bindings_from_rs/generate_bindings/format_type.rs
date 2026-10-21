@@ -143,7 +143,7 @@ fn is_smart_pointer<'tcx>(db: &BindingsGenerator<'tcx>, ty: Ty<'tcx>) -> Result<
     let Some(trait_id) = supports_nullable_trait(db)? else {
         return Ok(false);
     };
-    Ok(query_compiler::does_type_implement_trait(db.tcx(), ty, trait_id, []))
+    Ok(db.does_type_implement_trait(ty, trait_id))
 }
 
 /// Returns true if `did` is `cc_std::std::Nullable` or `cc_std::std::NonNull` (**not**
@@ -169,7 +169,7 @@ fn does_type_implement_delete<'tcx>(db: &BindingsGenerator<'tcx>, ty: Ty<'tcx>) 
     let Some(delete_trait_id) = delete_trait_id else {
         return false;
     };
-    query_compiler::does_type_implement_trait(tcx, ty, delete_trait_id, [])
+    db.does_type_implement_trait(ty, delete_trait_id)
 }
 
 /// Implementation of `BindingsGenerator::is_proto_message`.
@@ -187,7 +187,7 @@ pub fn is_proto_message<'tcx>(db: &BindingsGenerator<'tcx>, ty: Ty<'tcx>) -> boo
     let Some(message_trait_id) = message_trait_id else {
         return false;
     };
-    query_compiler::does_type_implement_trait(tcx, ty, message_trait_id, [])
+    db.does_type_implement_trait(ty, message_trait_id)
 }
 
 /// Returns true if `ty` is annotated with `cpp_thread_safe`.
