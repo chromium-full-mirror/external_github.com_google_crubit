@@ -349,5 +349,16 @@ fn rs_type_kind_with_lifetime_elision_impl<'a>(
             );
             Err(e.into())
         }
+        CcTypeVariant::ConstantArray(_) => {
+            let e = error_report::FormattedError::new(
+                "Unsupported type '$0': $1".into(),
+                format!(
+                    "Unsupported type '{}': Unsupported clang::Type class 'ConstantArray'",
+                    db.cc_type_debug_name(&ty)
+                )
+                .into(),
+            );
+            Err(e.into())
+        }
     }
 }
