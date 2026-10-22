@@ -1363,20 +1363,24 @@ std::unique_ptr<ir_proto::Item> CXXRecordDeclImporter::Import(
 
   auto pack = GetPack(ictx_.ctx_, *record_decl);
   if (pack.has_value()) {
-    // An explicit alignment on the record itself, or on the typedef naming an
-    // anonymous record, is applied on top of the packed layout.
-    const clang::Decl* align_sources[] = {
-        record_decl, record_decl->getTypedefNameForAnonDecl()};
-    for (const clang::Decl* decl : align_sources) {
-      const auto* aligned =
-          decl == nullptr ? nullptr : decl->getAttr<clang::AlignedAttr>();
-      if (aligned != nullptr &&
-          ictx_.ctx_.toCharUnitsFromBits(aligned->getAlignment(ictx_.ctx_))
-                  .getQuantity() > *pack) {
-        return unsupported(FormattedError::Static(
-            "Records with packed layout and explicit alignment greater than "
-            "packed alignment are not supported"));
-      }
+    // An explicit alignment on the record itself, on the typedef naming an
+    // anonymous record, or on any of its fields is applied on top of the
+    // packed layout.
+    auto exceeds_pack = [&](const clang::Decl* decl) {
+      return decl != nullptr &&
+             ictx_.ctx_.toCharUnitsFromBits(decl->getMaxAlignment())
+                     .getQuantity() > *pack;
+    };
+    if (exceeds_pack(record_decl) ||
+        exceeds_pack(record_decl->getTypedefNameForAnonDecl()) ||
+        (record_decl->isCompleteDefinition() &&
+         (ictx_.ctx_.getASTRecordLayout(record_decl)
+                  .getAlignment()
+                  .getQuantity() > *pack ||
+          absl::c_any_of(record_decl->fields(), exceeds_pack)))) {
+      return unsupported(FormattedError::Static(
+          "Records with packed layout and explicit alignment greater than "
+          "packed alignment are not supported"));
     }
   }
 
@@ -1706,17 +1710,23 @@ std::vector<ir_proto::Field> CXXRecordDeclImporter::ImportFields(
     }
 
     std::optional<std::string> deprecated;
-    absl::StatusOr<std::optional<std::string>> unknown_attr =
-        CollectUnknownAttrs(*field_decl, [&](const clang::Attr& attr) {
-          if (auto* deprecated_attr =
-                  clang::dyn_cast<clang::DeprecatedAttr>(&attr)) {
-            deprecated.emplace(deprecated_attr->getMessage());
-            return true;
-          } else if (clang::isa<clang::UnusedAttr>(attr)) {
-            return true;
-          }
-          return false;
-        });
+    absl::StatusOr<std::optional<std::string>> unknown_attr;
+    if (field_decl->hasAttr<clang::AlignedAttr>()) {
+      unknown_attr = absl::UnimplementedError(
+          "Fields with explicit alignment attributes are not supported");
+    } else {
+      unknown_attr =
+          CollectUnknownAttrs(*field_decl, [&](const clang::Attr& attr) {
+            if (auto* deprecated_attr =
+                    clang::dyn_cast<clang::DeprecatedAttr>(&attr)) {
+              deprecated.emplace(deprecated_attr->getMessage());
+              return true;
+            } else if (clang::isa<clang::UnusedAttr>(attr)) {
+              return true;
+            }
+            return false;
+          });
+    }
 
     ir_proto::Field proto_field;
     if (auto rust_id = GetTranslatedFieldName(field_decl);

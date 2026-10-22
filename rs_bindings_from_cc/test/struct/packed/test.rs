@@ -136,3 +136,11 @@ fn test_pragma_pack_4_array_stride() {
     expect_eq!(size_of::<[PragmaPacked4; 2]>(), kPragmaPacked4Array2Size);
     expect_eq!(size_of::<[PragmaPacked4; 3]>(), kPragmaPacked4Array3Size);
 }
+
+#[gtest]
+fn test_overaligned_fields_layout() {
+    expect_eq!(align_of::<OveralignedFields>(), 8);
+    expect_eq!(size_of::<OveralignedFields>(), 24);
+    expect_eq!(offset_of!(OveralignedFields, prefix), 0);
+    expect_eq!(offset_of!(OveralignedFields, mid), 12);
+}

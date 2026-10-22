@@ -107,6 +107,13 @@ std::unique_ptr<ir_proto::Item> crubit::TypeAliasImporter::Import(
           {FormattedError::Static(
               "Typedef only used to introduce a name in C. Not importing.")});
     }
+    if (typedef_name_decl->hasAttr<clang::AlignedAttr>()) {
+      return ictx_.ImportUnsupportedItem(
+          *decl, std::nullopt,
+          {FormattedError::Static(
+              "Typedefs with explicit alignment attributes are not "
+              "supported.")});
+    }
   } else if (auto* using_decl = clang::dyn_cast<clang::UsingShadowDecl>(decl)) {
     clang::NamedDecl* target = using_decl->getTargetDecl();
     if (auto* function_decl = clang::dyn_cast<clang::FunctionDecl>(target)) {

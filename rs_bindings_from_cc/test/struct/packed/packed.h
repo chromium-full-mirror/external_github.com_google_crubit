@@ -196,4 +196,28 @@ inline void IncrementPackedArray(PackedStruct* arr, size_t len) {
   }
 }
 
+// Packed struct with an overaligned field (`alignas(8) > pack(1)`): unsupported
+// without breaking codegen or rustc compilation of sibling items in the header.
+struct __attribute__((packed)) PackedWithAlignedField {
+  char c;
+  alignas(8) int x;
+};
+
+// Overaligned typedef and field-level `alignas(8)` on an unpacked struct.
+using OveralignedInt __attribute__((aligned(8))) = int;
+
+struct OveralignedFields final {
+  uint8_t prefix;
+  OveralignedInt typedef_val;
+  uint8_t mid;
+  alignas(8) int x;
+};
+
+static_assert(sizeof(OveralignedFields) == 24);
+static_assert(alignof(OveralignedFields) == 8);
+static_assert(offsetof(OveralignedFields, prefix) == 0);
+static_assert(offsetof(OveralignedFields, typedef_val) == 8);
+static_assert(offsetof(OveralignedFields, mid) == 12);
+static_assert(offsetof(OveralignedFields, x) == 16);
+
 #endif  // CRUBIT_RS_BINDINGS_FROM_CC_TEST_STRUCT_PACKED_PACKED_H_

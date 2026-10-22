@@ -36,6 +36,10 @@ The fields on the Rust struct type are the corresponding Rust types:
     field uses the corresponding Rust type.
 *   Similarly, if the C++ field has [pointer type](../types/pointer.md), then
     the Rust field has the corresponding Rust pointer type.
+*   If the C++ field has a non-zero fixed-length C-style array type (`T[N]`) of
+    a [primitive type](../types/primitive.md) or [enum](enums.md) (including
+    multidimensional arrays such as `T[M][N]`), then the Rust field has type
+    `[T; N]`.
 *   If the field has a user-defined type, such as a
     [class type](classes_and_structs.md) or [enum](enums.md), then the bindings
     for the function use the bindings for that type.

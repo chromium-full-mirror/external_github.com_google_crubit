@@ -639,6 +639,26 @@ impl PointerType {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub struct ConstantArrayType {
+    pub(crate) num_elements: usize,
+    pub(crate) element_type: Rc<CcType>,
+}
+
+impl ConstantArrayType {
+    pub fn new(num_elements: usize, element_type: Rc<CcType>) -> Self {
+        Self { num_elements, element_type }
+    }
+
+    pub fn num_elements(&self) -> usize {
+        self.num_elements
+    }
+
+    pub fn element_type(&self) -> &CcType {
+        &self.element_type
+    }
+}
+
 ///// Generates an enum type that implements `ToTokens`, which quotes the contents of the braces.
 macro_rules! define_typed_tokens_enum {
     {$(#[$ty_attr:meta])* $vis:vis enum $Type:ident {$($(#[$variant_attr:meta])* $Variant:ident = {$($cpp_spelling:tt)+},)+}} => {
@@ -842,6 +862,7 @@ pub enum CcTypeVariant {
         /// The type arguments to the type. These override any type arguments attached to the item.
         template_args: Option<Rc<[CcType]>>,
     },
+    ConstantArray(ConstantArrayType),
     /// This type could not be translated to Rust.
     ///
     /// It's preferable to forward on a failed type conversion,

@@ -58,6 +58,9 @@ C++ and Rust:
 :                                                :                             :                           : compatible    :                             :
 | Fixed-size array                               | `std::array<T, N>`          | `[T; N]`                  | Layout        |                             |
 :                                                :                             :                           : compatible    :                             :
+| C-style fixed-size array                       | `T[N]`                      | `[T; N]`                  | Layout        | Struct/union fields of      |
+:                                                :                             :                           : compatible    : primitive or enum types     :
+:                                                :                             :                           :               : (`N > 0`)                   :
 | **Strings**                                    |                             |                           |               |                             |
 | [String                                        | `std::string_view`          | `cpp_std::string_view`    | Layout        |                             |
 : view](http\://crubit.rs/cpp/std#string_view)   :                             :                           : compatible    :                             :
