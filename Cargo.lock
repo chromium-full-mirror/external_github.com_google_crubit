@@ -1325,6 +1325,7 @@ version = "0.0.0"
 dependencies = [
  "crubit_build",
  "rs_bindings_from_cc_importer_sys",
+ "rs_bindings_from_cc_logging_sys",
 ]
 
 [[package]]
@@ -1334,6 +1335,7 @@ dependencies = [
  "crubit_build",
  "rs_bindings_from_cc_ast_util_sys",
  "rs_bindings_from_cc_cc_ir_sys",
+ "rs_bindings_from_cc_logging_sys",
  "rs_bindings_from_cc_recording_diagnostic_consumer_sys",
 ]
 
@@ -1344,6 +1346,7 @@ dependencies = [
  "annotation_reader_sys",
  "crubit_build",
  "rs_bindings_from_cc_cc_ir_sys",
+ "rs_bindings_from_cc_logging_sys",
  "rs_bindings_from_cc_recording_diagnostic_consumer_sys",
  "status_sys",
 ]
@@ -1526,6 +1529,7 @@ dependencies = [
  "lifetime_annotations_sys",
  "pragma_sys",
  "rs_bindings_from_cc_ast_consumer_sys",
+ "rs_bindings_from_cc_logging_sys",
  "status_sys",
 ]
 
@@ -1789,11 +1793,13 @@ dependencies = [
  "rs_bindings_from_cc_friend_sys",
  "rs_bindings_from_cc_function_sys",
  "rs_bindings_from_cc_function_template_sys",
+ "rs_bindings_from_cc_logging_sys",
  "rs_bindings_from_cc_namespace_sys",
  "rs_bindings_from_cc_recording_diagnostic_consumer_sys",
  "rs_bindings_from_cc_type_alias_sys",
  "rs_bindings_from_cc_type_map_sys",
  "rs_bindings_from_cc_var_sys",
+ "status_sys",
  "type_lifetimes_sys",
 ]
 
@@ -1836,6 +1842,7 @@ dependencies = [
  "rs_bindings_from_cc_cc_ir_sys",
  "rs_bindings_from_cc_cmdline_sys",
  "rs_bindings_from_cc_frontend_action_sys",
+ "rs_bindings_from_cc_logging_sys",
  "rs_bindings_from_cc_profiling_sys",
  "status_sys",
 ]

@@ -74,7 +74,6 @@ crubit_cc_test(
         ":annotation_reader",
         ":check",
         ":status",
-        ":string_view_conversion",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:testing",
         "@llvm-project//llvm:Support",
@@ -281,7 +280,6 @@ cc_library(
     name = "strong_int",
     hdrs = ["strong_int.h"],
     deps = [
-        "@abseil-cpp//absl/hash",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -290,8 +288,6 @@ cc_library(
     name = "string_type",
     hdrs = ["string_type.h"],
     deps = [
-        "@abseil-cpp//absl/flags:marshalling",
-        "@abseil-cpp//absl/strings:string_view",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -300,10 +296,6 @@ cc_library(
     name = "status_macros",
     hdrs = ["status_macros.h"],
     deps = [
-        ":status_absl_compat",
-        "@abseil-cpp//absl/base:core_headers",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -425,8 +417,6 @@ cc_library(
     hdrs = ["status_test_matchers.h"],
     deps = [
         ":status",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
         "@googletest//:gtest",
         "@llvm-project//llvm:Support",
     ],
@@ -435,15 +425,6 @@ cc_library(
 cc_library(
     name = "rust_allocator_shims",
     srcs = ["rust_allocator_shims.c"],
-)
-
-cc_library(
-    name = "string_view_conversion",
-    hdrs = ["string_view_conversion.h"],
-    deps = [
-        "@abseil-cpp//absl/strings:string_view",
-        "@llvm-project//llvm:Support",
-    ],
 )
 
 rust_library(
@@ -541,17 +522,6 @@ crubit_cc_test(
     ],
 )
 
-cc_library(
-    name = "status_absl_compat",
-    hdrs = ["status_absl_compat.h"],
-    deps = [
-        ":status",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
-        "@llvm-project//llvm:Support",
-    ],
-)
-
 crubit_cc_test(
     name = "status_macros_test",
     srcs = ["status_macros_test.cc"],
@@ -560,8 +530,6 @@ crubit_cc_test(
     deps = [
         ":status",
         ":status_macros",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
         "@googletest//:gtest_main",
         "@llvm-project//llvm:Support",
     ],
@@ -575,8 +543,6 @@ crubit_cc_test(
     deps = [
         ":status",
         ":status_test_matchers",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
         "@googletest//:gtest_main",
         "@llvm-project//llvm:Support",
     ],

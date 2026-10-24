@@ -6,5 +6,6 @@
 
 extern crate annotation_reader_sys;
 extern crate cc_ir_sys;
+extern crate logging_sys;
 extern crate recording_diagnostic_consumer_sys;
 extern crate status_sys;

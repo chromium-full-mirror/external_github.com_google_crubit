@@ -31,11 +31,6 @@ package(
     default_visibility = ["//:__subpackages__"],
 )
 
-config_setting(
-    name = "enable_heap_profiling",
-    define_values = {"enable_heap_profiling": "1"},
-)
-
 _PROFILING_RUSTC_FLAGS = select({
     ":enable_heap_profiling": ["--cfg=enable_heap_profiling"],
     "//conditions:default": [],
@@ -92,10 +87,6 @@ crubit_rust_binary(
 cc_library(
     name = "rs_bindings_from_cc_impl",
     srcs = ["rs_bindings_from_cc.cc"],
-    defines = select({
-        ":enable_heap_profiling": ["CRUBIT_HEAP_PROFILING"],
-        "//conditions:default": [],
-    }),
     deps = [
         ":cc_ir",
         ":cmdline",
@@ -183,12 +174,12 @@ cc_library(
         ":cc_ir",
         ":clang_compat_macros",
         ":decl_importer",
+        ":logging",
         ":recording_diagnostic_consumer",
         "//common:annotation_reader",
         "//common:check",
         "//common:status",
         "//common:status_macros",
-        "//common:string_view_conversion",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:basic",
         "@llvm-project//clang:sema",
@@ -237,9 +228,7 @@ cc_library(
         "//common:check",
         "//common:status",
         "@llvm-project//llvm:Support",
-    ] + select({
-        "//conditions:default": [],
-    }),
+    ],
 )
 
 cc_library(
@@ -323,12 +312,6 @@ cc_library(
         "//lifetime_annotations",
         "//lifetime_annotations:type_lifetimes",
         "//nullability:pragma",
-        "@abseil-cpp//absl/algorithm:container",
-        "@abseil-cpp//absl/base:nullability",
-        "@abseil-cpp//absl/container:flat_hash_map",
-        "@abseil-cpp//absl/container:flat_hash_set",
-        "@abseil-cpp//absl/strings:string_view",
-        "@abseil-cpp//absl/types:span",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:basic",
         "@llvm-project//clang:sema",
@@ -343,8 +326,8 @@ cc_library(
     deps = [
         ":ast_consumer",
         ":decl_importer",
+        ":logging",
         "//common:status",
-        "//common:string_view_conversion",
         "//lifetime_annotations",
         "//nullability:pragma",
         "@llvm-project//clang:ast",
@@ -360,6 +343,7 @@ cc_library(
     deps = [
         ":decl_importer",
         ":importer",
+        ":logging",
         "//common:check",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:frontend",
@@ -384,12 +368,13 @@ cc_library(
         ":clang_compat_macros",
         ":cmdline",
         ":decl_importer",
+        ":logging",
         ":recording_diagnostic_consumer",
         ":type_map",
         "//common:annotation_reader",
         "//common:check",
+        "//common:status",
         "//common:status_macros",
-        "//common:string_view_conversion",
         "//lifetime_annotations:type_lifetimes",
         "//nullability:pragma",
         "//rs_bindings_from_cc/importers:class_template",
@@ -403,12 +388,6 @@ cc_library(
         "//rs_bindings_from_cc/importers:namespace",
         "//rs_bindings_from_cc/importers:type_alias",
         "//rs_bindings_from_cc/importers:var",
-        "@abseil-cpp//absl/algorithm:container",
-        "@abseil-cpp//absl/base:nullability",
-        "@abseil-cpp//absl/container:flat_hash_map",
-        "@abseil-cpp//absl/container:flat_hash_set",
-        "@abseil-cpp//absl/log",
-        "@abseil-cpp//absl/strings:string_view",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:basic",
         "@llvm-project//clang:lex",
@@ -475,7 +454,6 @@ cc_library(
         "//common:status",
         "//common:strong_int",
         "//support/rs_std/internal:is_utf8",
-        "@abseil-cpp//absl/status",
         "@llvm-project//clang:ast",
         "@llvm-project//llvm:Support",
     ],
@@ -588,12 +566,11 @@ cc_library(
         ":cmdline",
         ":decl_importer",
         ":frontend_action",
+        ":logging",
         ":profiling",
         "//common:check",
         "//common:status",
         "//common:status_macros",
-        "@abseil-cpp//absl/container:flat_hash_map",
-        "@abseil-cpp//absl/container:flat_hash_set",
         "@llvm-project//clang:basic",
         "@llvm-project//clang:frontend",
         "@llvm-project//clang:serialization",
@@ -614,10 +591,6 @@ cc_library(
         ":ir_from_cc",
         "//common:cc_ffi_types",
         "//common:status",
-        "@abseil-cpp//absl/container:flat_hash_set",
-        "@abseil-cpp//absl/log",
-        "@abseil-cpp//absl/status:statusor",
-        "@abseil-cpp//absl/strings:string_view",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -712,6 +685,7 @@ cc_library(
         ":ast_util",
         ":cc_ir",
         ":decl_importer",
+        ":logging",
         ":recording_diagnostic_consumer",
         "//common:check",
         "@llvm-project//clang:ast",
@@ -855,6 +829,12 @@ crubit_cc_test(
         "@googletest//:gtest_main",
         "@llvm-project//llvm:Support",
     ],
+)
+
+config_setting(
+    name = "enable_heap_profiling",
+    values = {"define": "crubit_heap_profiling=true"},
+    visibility = ["//rs_bindings_from_cc:__subpackages__"],
 )
 
 cc_library(

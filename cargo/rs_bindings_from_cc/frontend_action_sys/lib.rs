@@ -6,5 +6,6 @@
 
 extern crate ast_consumer_sys;
 extern crate lifetime_annotations_sys;
+extern crate logging_sys;
 extern crate pragma_sys;
 extern crate status_sys;
