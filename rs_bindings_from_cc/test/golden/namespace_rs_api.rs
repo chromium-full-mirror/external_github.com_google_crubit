@@ -18,8 +18,8 @@ pub mod test_namespace_bindings {
     #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
     #[cfi_encoding = "N23test_namespace_bindings1SE"]
     #[repr(C)]
-    ///CRUBIT_ANNOTATE: cpp_type=test_namespace_bindings :: S
-    ///CRUBIT_ANNOTATE: cpp_move_constructible=
+    #[cfg_attr(not(doc), doc = "CRUBIT_ANNOTATE: cpp_type=test_namespace_bindings :: S")]
+    #[cfg_attr(not(doc), doc = "CRUBIT_ANNOTATE: cpp_move_constructible=")]
     pub struct S {
         pub i: ::ffi_11::c_int,
     }
@@ -104,8 +104,11 @@ pub mod test_namespace_bindings_reopened {
         #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
         #[cfi_encoding = "N32test_namespace_bindings_reopened5inner1SE"]
         #[repr(C)]
-        ///CRUBIT_ANNOTATE: cpp_type=test_namespace_bindings_reopened :: inner :: S
-        ///CRUBIT_ANNOTATE: cpp_move_constructible=
+        #[cfg_attr(
+            not(doc),
+            doc = "CRUBIT_ANNOTATE: cpp_type=test_namespace_bindings_reopened :: inner :: S"
+        )]
+        #[cfg_attr(not(doc), doc = "CRUBIT_ANNOTATE: cpp_move_constructible=")]
         pub struct S {
             __non_field_data: [::core::mem::MaybeUninit<u8>; 1],
         }
@@ -152,8 +155,11 @@ pub mod test_namespace_bindings_inline {
         #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
         #[cfi_encoding = "N30test_namespace_bindings_inline5inner23StructInInlineNamespaceE"]
         #[repr(C)]
-        ///CRUBIT_ANNOTATE: cpp_type=test_namespace_bindings_inline :: inner :: StructInInlineNamespace
-        ///CRUBIT_ANNOTATE: cpp_move_constructible=
+        #[cfg_attr(
+            not(doc),
+            doc = "CRUBIT_ANNOTATE: cpp_type=test_namespace_bindings_inline :: inner :: StructInInlineNamespace"
+        )]
+        #[cfg_attr(not(doc), doc = "CRUBIT_ANNOTATE: cpp_move_constructible=")]
         pub struct StructInInlineNamespace {
             __non_field_data: [::core::mem::MaybeUninit<u8>; 1],
         }
@@ -224,8 +230,8 @@ pub mod ns_with_type_visibility {
     #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
     #[cfi_encoding = "N23ns_with_type_visibility1SE"]
     #[repr(C)]
-    ///CRUBIT_ANNOTATE: cpp_type=ns_with_type_visibility :: S
-    ///CRUBIT_ANNOTATE: cpp_move_constructible=
+    #[cfg_attr(not(doc), doc = "CRUBIT_ANNOTATE: cpp_type=ns_with_type_visibility :: S")]
+    #[cfg_attr(not(doc), doc = "CRUBIT_ANNOTATE: cpp_move_constructible=")]
     pub struct S {
         pub x: ::ffi_11::c_int,
     }
@@ -258,8 +264,8 @@ pub mod ns_with_visibility {
     #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
     #[cfi_encoding = "N18ns_with_visibility1SE"]
     #[repr(C)]
-    ///CRUBIT_ANNOTATE: cpp_type=ns_with_visibility :: S
-    ///CRUBIT_ANNOTATE: cpp_move_constructible=
+    #[cfg_attr(not(doc), doc = "CRUBIT_ANNOTATE: cpp_type=ns_with_visibility :: S")]
+    #[cfg_attr(not(doc), doc = "CRUBIT_ANNOTATE: cpp_move_constructible=")]
     pub struct S {
         pub x: ::ffi_11::c_int,
     }
