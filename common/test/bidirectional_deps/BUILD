@@ -11,7 +11,11 @@ load(
     "//cc_bindings_from_rs/test/golden:golden_test.bzl",
     rust_golden_test = "golden_test",
 )
-load("//common:crubit_wrapper_macros_oss.bzl", "crubit_cc_test", "crubit_rust_test")
+load(
+    "//common:crubit_wrapper_macros_oss.bzl",
+    "crubit_cc_test",
+    "crubit_rust_test",
+)
 load("//rs_bindings_from_cc/test:test_bindings.bzl", "crubit_test_cc_library")
 # TODO(jeanpierreda): Uncomment this, see below.
 # load(
@@ -46,12 +50,27 @@ crubit_test_cc_library(
     aspect_hints = ["//features:supported"],
     deps = [
         ":leaf_rs_lib_cc_api",
+        "//support:lifetime_annotations",
     ],
 )
 
 rust_api_from_cpp(
     name = "middle_cc_lib_rust",
     cpp_target = ":middle_cc_lib",
+)
+
+crubit_test_cc_library(
+    name = "middle_cc_lib_no_assume_lifetimes",
+    hdrs = ["middle_cc_lib_no_assume_lifetimes.h"],
+    aspect_hints = ["//features:no_assume_lifetimes"],
+    deps = [
+        ":leaf_rs_lib_cc_api",
+    ],
+)
+
+rust_api_from_cpp(
+    name = "middle_cc_lib_no_assume_lifetimes_rust",
+    cpp_target = ":middle_cc_lib_no_assume_lifetimes",
 )
 
 # TODO(jeanpierreda): Currently puts bindings from deps in, causing leeks, and exposes temporary
@@ -69,7 +88,9 @@ crubit_rust_test(
     srcs = ["rs_test.rs"],
     deps = [
         ":leaf_rs_lib",
+        ":middle_cc_lib_no_assume_lifetimes_rust",
         ":middle_cc_lib_rust",
+        "//support:crubit_support",
         "@crate_index//:googletest",
     ],
 )

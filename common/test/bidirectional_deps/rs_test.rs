@@ -27,3 +27,71 @@ fn test_alias_round_trip() {
     let value: middle_cc_lib::LeafRsTypeAlias2 = leaf_rs_lib::wrap(2);
     assert_eq!(middle_cc_lib::crubit::Unwrap(value), 2);
 }
+
+#[gtest]
+fn test_lifetime_round_trip() {
+    let static_value: leaf_rs_lib::LeafRsLifetime<'static> =
+        middle_cc_lib::crubit::MakeStaticLifetime();
+    assert_eq!(leaf_rs_lib::unwrap_lifetime(static_value), 42);
+
+    let unannotated_value: leaf_rs_lib::LeafRsLifetime<'static> =
+        middle_cc_lib::crubit::MakeUnannotatedLifetime();
+    assert_eq!(middle_cc_lib::crubit::UnwrapLifetime(unannotated_value), 42);
+
+    let y: u8 = 9;
+    let x: u8 = 7;
+    // SAFETY: `MakeAmbiguousLifetime` borrows `x`, which outlives `ambiguous_value`.
+    let ambiguous_value: leaf_rs_lib::LeafRsLifetime<'static> =
+        unsafe { middle_cc_lib::crubit::MakeAmbiguousLifetime(&x, &y).into_inner() };
+    assert_eq!(middle_cc_lib::crubit::UnwrapLifetime(ambiguous_value), 7);
+
+    let static_alias: leaf_rs_lib::StaticLeafRsLifetime =
+        middle_cc_lib::crubit::MakeStaticLifetimeAlias();
+    assert_eq!(leaf_rs_lib::unwrap_lifetime(static_alias), 42);
+
+    let borrowed: leaf_rs_lib::LeafRsLifetime<'_> = middle_cc_lib::crubit::WrapLifetime(&x);
+    assert_eq!(middle_cc_lib::crubit::UnwrapLifetime(borrowed), 7);
+
+    // SAFETY: `UnwrapUnknownLifetime` only reads `static_value` during the call.
+    assert_eq!(
+        unsafe {
+            middle_cc_lib::crubit::UnwrapUnknownLifetime(crubit_support::Unsafe::new(
+                leaf_rs_lib::static_lifetime(),
+            ))
+        },
+        42,
+    );
+
+    let elided: leaf_rs_lib::LeafRsLifetime<'_> = middle_cc_lib::crubit::WrapLifetimeElided(&x);
+    assert_eq!(leaf_rs_lib::unwrap_lifetime(elided), 7);
+
+    let alias_borrowed: middle_cc_lib::LeafRsLifetimeAlias2<'_> =
+        middle_cc_lib::crubit::WrapLifetimeAlias(&x);
+    assert_eq!(middle_cc_lib::crubit::UnwrapLifetime(alias_borrowed), 7);
+}
+
+#[gtest]
+fn test_lifetime_round_trip_no_assume_lifetimes() {
+    let wrapped: crubit_support::Unsafe<leaf_rs_lib::LeafRsLifetime<'static>> =
+        middle_cc_lib_no_assume_lifetimes::MakeNoAssumeLifetime();
+    assert_eq!(format!("{wrapped:?}"), "Unsafe(..)");
+    // SAFETY: `MakeNoAssumeLifetime` returns a `'static` `LeafRsLifetime`.
+    let unwrapped = unsafe { wrapped.into_inner() };
+    assert_eq!(leaf_rs_lib::unwrap_lifetime(unwrapped), 42);
+
+    let x: u8 = 11;
+    let borrowed = leaf_rs_lib::wrap_lifetime(&x);
+    // SAFETY: `TakeNoAssumeLifetime` only reads `borrowed` during the call and `x` is live.
+    assert_eq!(unsafe { middle_cc_lib_no_assume_lifetimes::TakeNoAssumeLifetime(borrowed) }, 11);
+
+    let alias_val: middle_cc_lib_no_assume_lifetimes::NoAssumeAlias =
+        middle_cc_lib_no_assume_lifetimes::MakeNoAssumeAlias();
+    // SAFETY: `MakeNoAssumeAlias` returns a `'static` `LeafRsLifetime`.
+    assert_eq!(unsafe { middle_cc_lib_no_assume_lifetimes::TakeNoAssumeAlias(alias_val) }, 42);
+
+    let holder = middle_cc_lib_no_assume_lifetimes::MakeNoAssumeHolder();
+    let holder_copy = holder;
+    assert_eq!(format!("{:?}", holder.field), "Unsafe(..)");
+    // SAFETY: `MakeNoAssumeHolder` initializes `field` with a `'static` `LeafRsLifetime`.
+    assert_eq!(leaf_rs_lib::unwrap_lifetime(unsafe { holder_copy.field.into_inner() }), 42);
+}

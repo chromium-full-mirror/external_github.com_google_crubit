@@ -301,6 +301,7 @@ rust_library(
         "crubit_support/src/erased_future.rs",
         "crubit_support/src/hash.rs",
         "crubit_support/src/lib.rs",
+        "crubit_support/src/unsafe_wrapper.rs",
     ],
     compatible_with = ["//buildenv/target:non_prod"],
     edition = "2024",
