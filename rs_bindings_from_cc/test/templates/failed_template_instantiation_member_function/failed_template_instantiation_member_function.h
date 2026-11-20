@@ -30,13 +30,12 @@ struct CRUBIT_ALWAYS_INSTANTIATE A final {
 
   int Call_Call_MethodReturnInt(T t) { return Call_MethodReturnInt(t); }
 
-  // TODO:(b/248542210): Currently, Crubit still imports the following method,
-  // since `FailMethod` passes type checking (but would fail instantiation), and
-  // Crubit doesn't check function templates recursively.
-  // Uncomment the following block when the issue is addressed.
-  // void Call_FailMethod(T t) {
-  //   FailMethod();  // Similarly, this also fails for `FailStaticMethod();`.
-  // }
+  // `FailMethod` passes initial type checking on the uninstantiated call in
+  // `Call_FailMethod`, so Crubit must check nested member instantiations
+  // recursively before importing `Call_FailMethod`.
+  void Call_FailMethod(T t) {
+    FailMethod();  // Similarly, this also fails for `FailStaticMethod();`.
+  }
 
   void Call_FailMethod_StaticAssert() {
     FailMethod();

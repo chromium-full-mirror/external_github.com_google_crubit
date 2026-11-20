@@ -4,6 +4,7 @@
 
 use failed_template_instantiation_member_function::*;
 use googletest::prelude::*;
+use method_exists::method_exists;
 
 /// Test to ensure that Crubit can import class template specialization with
 /// un-instantiable member function.
@@ -12,6 +13,11 @@ fn test_failed_template_instantiation_member_function() {
     InvokeNoOp(AForNoMethod::default());
     InvokeMethodReturnAuto(AForHasMethodReturningVoid::default());
     assert_eq!(1, InvokeMethodReturnAutoAndInt(AForHasMethodReturningInt::default()));
+
+    assert!(method_exists!(AForNoMethod, NoOp));
+    assert!(!method_exists!(AForNoMethod, Call_FailMethod));
+    assert!(!method_exists!(AForHasMethodReturningVoid, Call_FailMethod));
+    assert!(!method_exists!(AForHasMethodReturningInt, Call_FailMethod));
 }
 
 #[gtest]
